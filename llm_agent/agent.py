@@ -1,0 +1,153 @@
+"""Orchestrates chat (RAG over local memory) and web research.
+
+The model can trigger its own research: if it doesn't know something, it
+replies with a `SEARCH: <query>` directive instead of an answer, the agent
+runs that search automatically, saves what it learns to memory, and then
+asks the model again with the new context. This happens without the user
+needing to type a separate command — but every auto-triggered search is
+reported back to the caller so it's visible, not silent.
+
+Research is capped at one automatic round per chat turn so a confused model
+can't spiral into repeated web requests.
+"""
+
+import re
+from dataclasses import dataclass, field
+from typing import List, Dict, Tuple
+
+from . import config
+from . import llm_client
+from . import web_search
+from .memory import Memory, Note
+
+SEARCH_DIRECTIVE = re.compile(r"^\s*SEARCH:\s*(.+?)\s*$", re.IGNORECASE)
+
+CHAT_SYSTEM_PROMPT = (
+    "You are a helpful assistant running locally on the user's Chromebook. "
+    "You have access to a memory of notes you've researched previously, given "
+    "below as context — use it when relevant, and say when you're relying on it. "
+    "If the context doesn't contain what you need and the question depends on "
+    "current, specific, or unfamiliar information you're not confident about, "
+    "do not guess. Instead reply with EXACTLY one line in the form:\n"
+    "SEARCH: <a short, specific web search query>\n"
+    "and nothing else. Otherwise, just answer normally and conversationally."
+)
+
+NOTE_SYSTEM_PROMPT = (
+    "You write concise, factual notes for a personal knowledge base. Summarize "
+    "only what is actually stated in the given text. Do not speculate or add "
+    "outside knowledge. Keep it under 200 words."
+)
+
+
+@dataclass
+class ChatResult:
+    answer: str
+    researched_query: str = ""
+    notes_added: int = 0
+
+
+@dataclass
+class LearnResult:
+    topic: str
+    notes_added: List[Tuple[str, str]] = field(default_factory=list)  # (url, note)
+
+
+class Agent:
+    def __init__(self, memory: Memory = None):
+        self.memory = memory or Memory()
+
+    def _memory_context(self, query: str) -> str:
+        notes = self.memory.search(query, top_k=config.MEMORY_TOP_K)
+        if not notes:
+            return ""
+        lines = ["Relevant notes from memory:"]
+        for note in notes:
+            lines.append(f"- ({note.topic}, source: {note.source_url or 'n/a'}) {note.content}")
+        return "\n".join(lines)
+
+    def learn(self, topic: str) -> LearnResult:
+        result = LearnResult(topic=topic)
+        results = web_search.search(topic, num_results=config.SEARCH_RESULTS)
+        for hit in results:
+            text = web_search.fetch_text(hit.url)
+            if not text:
+                continue
+            summary = llm_client.chat(
+                [
+                    {"role": "system", "content": NOTE_SYSTEM_PROMPT},
+                    {
+                        "role": "user",
+                        "content": f"Topic: {topic}\n\nPage content:\n{text}",
+                    },
+                ]
+            )
+            if summary:
+                self.memory.add(topic=topic, content=summary, source_url=hit.url)
+                result.notes_added.append((hit.url, summary))
+        return result
+
+    def suggest_follow_up_topics(self, topic: str, notes: List[Tuple[str, str]]) -> List[str]:
+        """Ask the model what's worth researching next, based on what it just learned."""
+        if not notes:
+            return []
+        summary_text = "\n".join(note for _url, note in notes)
+        reply = llm_client.chat(
+            [
+                {
+                    "role": "system",
+                    "content": (
+                        "You help decide what to research next for a personal knowledge "
+                        f"base. You just learned about '{topic}'. Suggest up to "
+                        f"{config.CURIOSITY_FOLLOW_UPS_PER_TOPIC} closely related topics "
+                        "worth researching next. Reply with one topic per line, no "
+                        "numbering, no explanation. If nothing is worth following up on, "
+                        "reply with NONE."
+                    ),
+                },
+                {"role": "user", "content": summary_text},
+            ]
+        )
+        if not reply or reply.strip().upper() == "NONE":
+            return []
+        topics = [line.strip("-* \t") for line in reply.splitlines() if line.strip()]
+        return topics[: config.CURIOSITY_FOLLOW_UPS_PER_TOPIC]
+
+    def chat(self, user_input: str, history: List[Dict[str, str]] = None) -> ChatResult:
+        history = history or []
+        context = self._memory_context(user_input)
+
+        messages = [{"role": "system", "content": CHAT_SYSTEM_PROMPT}]
+        if context:
+            messages.append({"role": "system", "content": context})
+        messages.extend(history)
+        messages.append({"role": "user", "content": user_input})
+
+        reply = llm_client.chat(messages)
+        match = SEARCH_DIRECTIVE.match(reply)
+        if not match:
+            return ChatResult(answer=reply)
+
+        query = match.group(1)
+        learned = self.learn(query)
+
+        follow_up_context = self._memory_context(user_input)
+        follow_up_messages = [
+            {
+                "role": "system",
+                "content": CHAT_SYSTEM_PROMPT
+                + "\n\nYou already researched this once this turn — answer now using "
+                "the context below, don't reply with another SEARCH directive.",
+            }
+        ]
+        if follow_up_context:
+            follow_up_messages.append({"role": "system", "content": follow_up_context})
+        follow_up_messages.extend(history)
+        follow_up_messages.append({"role": "user", "content": user_input})
+
+        final_answer = llm_client.chat(follow_up_messages)
+        return ChatResult(
+            answer=final_answer,
+            researched_query=query,
+            notes_added=len(learned.notes_added),
+        )
