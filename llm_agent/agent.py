@@ -24,7 +24,7 @@ from typing import List, Dict, Tuple
 from . import config
 from . import llm_client
 from . import web_search
-from .memory import Memory, Note
+from .memory import Memory
 
 SEARCH_DIRECTIVE = re.compile(
     r"^\s*SEARCH:\s*(.+?)\s*$", re.IGNORECASE | re.MULTILINE

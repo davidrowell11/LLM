@@ -42,7 +42,7 @@ There are three ways research gets triggered, and only the first needs you:
 
 | Trigger | Needs you? | What happens |
 |---|---|---|
-| `/learn <topic>` | Yes | Researches that topic immediately. |
+| **Research…** in the app | Yes | Researches that topic immediately. |
 | Mid-chat | No | If Cortana doesn't know something while answering, she searches the web herself, saves notes, then answers — and tells you what she looked up. |
 | Background daemon | No | Runs on a timer with no conversation at all. Researches a topic, asks the model what's worth exploring next, queues those, repeats. Refills its own queue when it runs dry. |
 
@@ -79,7 +79,7 @@ Options: `./install.sh --no-service` (no background research) or
 ### Model sizing
 
 Chromebook RAM varies a lot, and an oversized model swap-thrashes the VM.
-`setup.sh` picks automatically:
+The installer picks automatically:
 
 | Detected RAM | Model | Approx. size |
 |---|---|---|
@@ -105,9 +105,27 @@ Open **Cortana** from the ChromeOS launcher. In the app:
 - **Queue…** — hand a topic to the background daemon for later.
 - **Memory** — how many notes are stored and where the database lives.
 
-The status bar shows what she's doing and how much she's learned. Model work
-runs on a background thread, so the window stays responsive even when a
-model is slow.
+Model work runs on a background thread, so the window stays responsive even
+when a model is slow.
+
+### Multiple chats
+
+The sidebar keeps separate conversations, like any chat app:
+
+- **+ New chat** starts a fresh thread. Each one is named automatically after
+  its first message.
+- Click any chat in the sidebar to switch back to it. Conversations are
+  stored on disk, so they survive closing the app and rebooting.
+- Each chat keeps its own context — a follow-up like "tell me more about
+  that" resolves against that conversation only, and nothing leaks between
+  threads.
+- **Delete** a chat with the ✕ on its row, or right-click for rename and
+  delete. Deleting a conversation removes only that thread; notes Cortana
+  learned stay in her memory, since memory is shared across every chat.
+
+That last point is the important distinction: a *conversation* is one thread
+of dialogue, while *memory* is everything she has learned. Deleting a chat
+never makes her forget a fact.
 
 ### Terminal version
 
@@ -242,6 +260,7 @@ llm_agent/
   config.py       settings (env-var driven)
   llm_client.py   wrapper around Ollama's chat/embeddings API
   memory.py       SQLite-backed vector store (notes, cosine search, dedup)
+  conversations.py  persistent chat threads (titles, messages, history)
   web_search.py   DuckDuckGo search + page text extraction, no API key
   agent.py        RAG chat, research, follow-up and new-topic proposals
   topics.py       persistent queue of topics for the daemon
@@ -254,7 +273,7 @@ install-service.sh   background research as a systemd service
 launch-cortana.sh    what the launcher icon runs
 tools/make_icon.py   renders the app icon (stdlib only, no Pillow)
 assets/           icon and screenshot
-tests/            83 tests, no network or Ollama required
+tests/            111 tests, no network or Ollama required
 ```
 
 ## Testing

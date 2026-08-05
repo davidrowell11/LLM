@@ -19,6 +19,10 @@ MAX_FETCH_CHARS = int(os.environ.get("MAX_FETCH_CHARS", "6000"))
 
 REQUEST_TIMEOUT_SECONDS = int(os.environ.get("REQUEST_TIMEOUT_SECONDS", "20"))
 
+# Conversation turns kept as context. Small local models have modest context
+# windows, so this is capped rather than unbounded.
+MAX_HISTORY_TURNS = int(os.environ.get("MAX_HISTORY_TURNS", "12"))
+
 # SQLite is opened by both the CLI and the background daemon at the same time,
 # so give writers room to wait instead of failing with "database is locked".
 DB_BUSY_TIMEOUT_SECONDS = int(os.environ.get("DB_BUSY_TIMEOUT_SECONDS", "30"))

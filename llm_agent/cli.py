@@ -22,12 +22,20 @@ saved notes automatically, and may research the web on her own if she
 doesn't know the answer -- when she does, she'll tell you what she searched.
 """
 
-MAX_HISTORY_TURNS = 12  # keep prompts bounded for a small local model
+MAX_HISTORY_TURNS = config.MAX_HISTORY_TURNS
 
 
 def _print_learn_result(result) -> None:
+    # "Couldn't reach the web" and "searched but found nothing" call for
+    # different responses from the user, so don't report them identically.
+    if not result.reachable:
+        print(
+            f"Couldn't reach the web to research '{result.topic}'. "
+            "Check your connection and try again."
+        )
+        return
     if not result.notes_added:
-        print(f"Couldn't find anything usable for '{result.topic}'.")
+        print(f"Searched, but found nothing usable for '{result.topic}'.")
         return
     print(f"Learned {len(result.notes_added)} note(s) about '{result.topic}':")
     for url, note in result.notes_added:
