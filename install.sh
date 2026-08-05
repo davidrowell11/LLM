@@ -72,17 +72,38 @@ else
     echo "Already installed."
 fi
 
-if ! curl -s -o /dev/null --max-time 3 "http://localhost:11434"; then
-    echo "Starting the model server..."
+ollama_up() { curl -s -o /dev/null --max-time 3 "http://localhost:11434"; }
+
+if ! ollama_up; then
+    # Prefer Ollama's own service if its installer created one. This matters
+    # beyond convenience: that service runs as the 'ollama' user and keeps
+    # models under /usr/share/ollama, while a server started by hand here
+    # would store them under $HOME. Pulling into the wrong one looks fine
+    # today and then fails at the next reboot with "model not found", because
+    # the service that starts at boot can't see them.
+    if command -v systemctl >/dev/null 2>&1 && systemctl cat ollama.service >/dev/null 2>&1; then
+        echo "Starting the packaged ollama service..."
+        sudo systemctl enable --now ollama.service >/dev/null 2>&1 || true
+        for _ in $(seq 1 20); do
+            sleep 1
+            ollama_up && break
+        done
+    fi
+fi
+
+if ! ollama_up; then
+    echo "Starting the model server directly..."
     nohup ollama serve >ollama.log 2>&1 &
     for _ in $(seq 1 20); do
         sleep 1
-        curl -s -o /dev/null --max-time 2 "http://localhost:11434" && break
+        ollama_up && break
     done
 fi
 
-if curl -s -o /dev/null --max-time 3 "http://localhost:11434"; then
+if ollama_up; then
     step "Downloading models (this is the slow part)"
+    # Pulls go to whichever server is listening, which is now the same one
+    # that will be running after a reboot.
     ollama pull "${CHAT_MODEL}"
     ollama pull "${EMBED_MODEL}"
 else

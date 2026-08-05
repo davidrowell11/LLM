@@ -7,3 +7,4 @@ ollama.log
 
 # Model choice recorded by the installer
 .env
+launcher.log

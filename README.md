@@ -173,7 +173,16 @@ Chromebook is off. Nothing installed *inside* the container can change that.
 The installer also creates an `ollama.service` if one doesn't exist, since
 the daemon needs a model server. It uses `Wants=` rather than `Requires=`,
 so a slow or missing Ollama delays research but never prevents the daemon
-from starting.
+from starting. Where Ollama's own packaged service exists, the installer
+starts *that* before downloading models — it runs as the `ollama` user and
+keeps models in a different place, so pulling into a hand-started server
+would look fine until the next reboot, then fail with "model not found".
+
+### If clicking the icon does nothing
+
+It shouldn't any more — the launcher reports failures in a dialog and writes
+`launcher.log` — but that file is the first place to look. The most common
+cause is that `./install.sh` hasn't been run in this container yet.
 
 Each cycle it pops a pending topic, researches it, saves notes, asks the
 model which related topics are worth exploring next, and queues those.
