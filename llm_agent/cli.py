@@ -17,9 +17,9 @@ Commands:
   /help            Show this message.
   /exit            Quit.
 
-Anything else is sent to the assistant as a chat message. It will pull in
-relevant saved notes automatically, and may research the web on its own if
-it doesn't know the answer -- when it does, it'll tell you what it searched.
+Anything else is sent to Cortana as a chat message. She'll pull in relevant
+saved notes automatically, and may research the web on her own if she
+doesn't know the answer -- when she does, she'll tell you what she searched.
 """
 
 MAX_HISTORY_TURNS = 12  # keep prompts bounded for a small local model
@@ -36,7 +36,10 @@ def _print_learn_result(result) -> None:
 
 
 def main() -> None:
-    print("Chromebook LLM -- local chat with a growing memory. Type /help for commands.")
+    print(
+        f"{config.ASSISTANT_NAME} -- local chat with a growing memory. "
+        "Type /help for commands."
+    )
     print(f"(chat model: {config.CHAT_MODEL}, embed model: {config.EMBED_MODEL})\n")
 
     memory = Memory()

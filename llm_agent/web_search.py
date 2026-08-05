@@ -4,6 +4,11 @@ Search goes through DuckDuckGo's HTML endpoint (the same one you get with
 JavaScript disabled), which doesn't require an API key or account. It's
 best-effort scraping, not a stable API, so it may need updating if
 DuckDuckGo changes their markup.
+
+Parsing uses BeautifulSoup's stdlib "html.parser" rather than lxml on
+purpose: lxml is a compiled C extension that needs libxml2/libxslt headers
+and a toolchain to build when no prebuilt wheel matches, which is a common
+failure on ARM Chromebooks. html.parser is slower but always available.
 """
 
 import re
@@ -55,7 +60,7 @@ def search(query: str, num_results: int = config.SEARCH_RESULTS) -> List[SearchR
     except requests.RequestException:
         return []
 
-    soup = BeautifulSoup(response.text, "lxml")
+    soup = BeautifulSoup(response.text, "html.parser")
     results: List[SearchResult] = []
     for anchor in soup.select("a.result__a"):
         title = anchor.get_text(strip=True)
@@ -82,7 +87,7 @@ def fetch_text(url: str, max_chars: int = config.MAX_FETCH_CHARS) -> Optional[st
     if "html" not in content_type:
         return None
 
-    soup = BeautifulSoup(response.text, "lxml")
+    soup = BeautifulSoup(response.text, "html.parser")
     for tag in soup(["script", "style", "nav", "footer", "header", "noscript"]):
         tag.decompose()
 

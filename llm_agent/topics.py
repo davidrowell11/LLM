@@ -25,7 +25,11 @@ class TopicQueue:
     def __init__(self, db_path: Path = config.MEMORY_DB_PATH):
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(self.db_path)
+        self._conn = sqlite3.connect(
+            self.db_path, timeout=config.DB_BUSY_TIMEOUT_SECONDS
+        )
+        # WAL lets the CLI queue topics while the daemon is mid-write.
+        self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute(
             """
             CREATE TABLE IF NOT EXISTS topics (

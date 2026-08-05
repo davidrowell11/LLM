@@ -3,3 +3,4 @@ __pycache__/
 *.pyc
 data/*.db
 .DS_Store
+ollama.log

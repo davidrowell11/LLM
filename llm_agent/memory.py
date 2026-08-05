@@ -36,7 +36,11 @@ class Memory:
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._embed = embed_fn
-        self._conn = sqlite3.connect(self.db_path)
+        self._conn = sqlite3.connect(
+            self.db_path, timeout=config.DB_BUSY_TIMEOUT_SECONDS
+        )
+        # WAL lets the CLI read while the daemon writes, instead of blocking.
+        self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute(
             """
             CREATE TABLE IF NOT EXISTS notes (
@@ -54,7 +58,24 @@ class Memory:
     def close(self) -> None:
         self._conn.close()
 
-    def add(self, topic: str, content: str, source_url: str = "") -> int:
+    def add(self, topic: str, content: str, source_url: str = "") -> Optional[int]:
+        """Store a note, or return None if we already have this exact content.
+
+        Different sources often restate the same fact. Without this check the
+        knowledge base fills with near-copies, and since retrieval returns a
+        fixed top_k, duplicates can occupy every slot and crowd out everything
+        else the model could have used.
+        """
+        content = content.strip()
+        if not content:
+            return None
+
+        existing = self._conn.execute(
+            "SELECT id FROM notes WHERE content = ?", (content,)
+        ).fetchone()
+        if existing:
+            return None
+
         embedding = self._embed(content)
         created_at = datetime.now(timezone.utc).isoformat()
         cursor = self._conn.execute(

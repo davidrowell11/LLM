@@ -18,6 +18,7 @@ unattended is always visible after the fact. Stop it any time with Ctrl+C.
 import sys
 import time
 from datetime import datetime, timezone
+from typing import List
 
 from . import config
 from .agent import Agent
@@ -58,15 +59,43 @@ def run_once(agent: Agent, queue: TopicQueue) -> bool:
     return True
 
 
+def replenish(agent: Agent, queue: TopicQueue) -> int:
+    """Refill a drained queue with self-proposed topics. Returns how many were added."""
+    try:
+        candidates = agent.propose_new_topics()
+    except OllamaError as exc:
+        _log(f"error proposing new topics: {exc}")
+        return 0
+
+    added = 0
+    for candidate in candidates:
+        if queue.add(candidate):
+            _log(f"self-proposed new topic: {candidate}")
+            added += 1
+    return added
+
+
+def seed_queue(queue: TopicQueue, cli_topics: List[str]) -> None:
+    """Seed from the command line, falling back to defaults on a cold start."""
+    for topic in cli_topics:
+        if queue.add(topic):
+            _log(f"seeded topic: {topic}")
+
+    # Only fall back to defaults on a genuinely cold start, so restarting the
+    # daemon doesn't keep re-adding topics you've already worked through.
+    if cli_topics or queue.pending_count() > 0:
+        return
+    for topic in config.SEED_TOPICS:
+        if queue.add(topic):
+            _log(f"seeded default topic: {topic}")
+
+
 def main() -> None:
     memory = Memory()
     agent = Agent(memory=memory)
     queue = TopicQueue()
 
-    seed_topics = sys.argv[1:]
-    for seed in seed_topics:
-        if queue.add(seed):
-            _log(f"seeded topic: {seed}")
+    seed_queue(queue, sys.argv[1:])
 
     _log(
         f"starting autonomous research loop "
@@ -76,16 +105,29 @@ def main() -> None:
 
     if queue.pending_count() == 0:
         _log(
-            "queue is empty -- add topics with 'python -m llm_agent.daemon <topic> [topic...]' "
-            "or the /curious command in the chat REPL, then restart this daemon."
+            "queue is empty -- add topics with 'python -m llm_agent.daemon <topic> "
+            "[topic...]' or /curious in the chat REPL. Polling for new ones."
         )
 
+    # Only try to self-replenish once per drain, otherwise every idle poll
+    # would fire off another LLM call.
+    replenished_this_drain = False
     try:
         while True:
             processed = run_once(agent, queue)
-            if not processed:
-                _log(f"queue empty, idling for {config.CURIOSITY_INTERVAL_SECONDS}s")
-            time.sleep(config.CURIOSITY_INTERVAL_SECONDS)
+            if processed:
+                replenished_this_drain = False
+                time.sleep(config.CURIOSITY_INTERVAL_SECONDS)
+                continue
+
+            if not replenished_this_drain:
+                replenished_this_drain = True
+                if replenish(agent, queue) > 0:
+                    continue  # work to do now, don't sleep
+
+            # Nothing to pace, so poll faster and pick up /curious additions
+            # from the CLI without waiting a full research interval.
+            time.sleep(config.CURIOSITY_IDLE_POLL_SECONDS)
     except KeyboardInterrupt:
         _log("stopping.")
     finally:

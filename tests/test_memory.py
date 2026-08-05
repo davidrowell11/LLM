@@ -28,6 +28,29 @@ def test_add_and_count(tmp_path):
     assert memory.count() == 1
 
 
+def test_add_returns_none_for_duplicate_content(tmp_path):
+    memory = make_memory(tmp_path)
+    first = memory.add(topic="pets", content="Cats nap.", source_url="http://a")
+    second = memory.add(topic="pets", content="Cats nap.", source_url="http://b")
+
+    assert first is not None
+    assert second is None
+    assert memory.count() == 1
+
+
+def test_add_ignores_surrounding_whitespace_when_deduping(tmp_path):
+    memory = make_memory(tmp_path)
+    memory.add(topic="pets", content="Cats nap.")
+    assert memory.add(topic="pets", content="  Cats nap.  ") is None
+    assert memory.count() == 1
+
+
+def test_add_rejects_empty_content(tmp_path):
+    memory = make_memory(tmp_path)
+    assert memory.add(topic="pets", content="   ") is None
+    assert memory.count() == 0
+
+
 def test_search_returns_most_similar(tmp_path):
     memory = make_memory(tmp_path)
     memory.add(topic="pets", content="Cats are independent animals.", source_url="http://cats")
