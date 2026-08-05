@@ -28,6 +28,11 @@ CURIOSITY_INTERVAL_SECONDS = int(os.environ.get("CURIOSITY_INTERVAL_SECONDS", "1
 CURIOSITY_MAX_QUEUE_SIZE = int(os.environ.get("CURIOSITY_MAX_QUEUE_SIZE", "50"))
 CURIOSITY_FOLLOW_UPS_PER_TOPIC = int(os.environ.get("CURIOSITY_FOLLOW_UPS_PER_TOPIC", "2"))
 
+# How many times to retry a topic that failed for reasons of its own -- being
+# offline, or Ollama not up yet. Matters most when the daemon starts at boot,
+# before the network is ready.
+CURIOSITY_MAX_ATTEMPTS = int(os.environ.get("CURIOSITY_MAX_ATTEMPTS", "5"))
+
 # When the queue is empty there's nothing to pace, so poll more often than the
 # research interval -- otherwise a topic added with /curious could sit unread
 # for a full interval before the daemon notices it.

@@ -80,6 +80,9 @@ class ChatResult:
 class LearnResult:
     topic: str
     notes_added: List[Tuple[str, str]] = field(default_factory=list)  # (url, note)
+    # False when the web couldn't be reached at all. The daemon uses this to
+    # retry the topic later instead of marking it researched.
+    reachable: bool = True
 
 
 class Agent:
@@ -97,7 +100,12 @@ class Agent:
 
     def learn(self, topic: str) -> LearnResult:
         result = LearnResult(topic=topic)
-        results = web_search.search(topic, num_results=config.SEARCH_RESULTS)
+        try:
+            results = web_search.search(topic, num_results=config.SEARCH_RESULTS)
+        except web_search.SearchError:
+            result.reachable = False
+            return result
+
         for hit in results:
             text = web_search.fetch_text(hit.url)
             if not text:

@@ -30,6 +30,16 @@ HEADERS = {"User-Agent": USER_AGENT}
 SEARCH_URL = "https://html.duckduckgo.com/html/"
 
 
+class SearchError(RuntimeError):
+    """The search request itself failed (offline, DNS, timeout).
+
+    Distinct from a successful search that simply matched nothing: the caller
+    must be able to tell "there's nothing to learn here" apart from "I
+    couldn't look", because the second case should be retried later rather
+    than treated as a finished topic.
+    """
+
+
 @dataclass
 class SearchResult:
     title: str
@@ -57,8 +67,8 @@ def search(query: str, num_results: int = config.SEARCH_RESULTS) -> List[SearchR
             timeout=config.REQUEST_TIMEOUT_SECONDS,
         )
         response.raise_for_status()
-    except requests.RequestException:
-        return []
+    except requests.RequestException as exc:
+        raise SearchError(f"search request failed: {exc}") from exc
 
     soup = BeautifulSoup(response.text, "html.parser")
     results: List[SearchResult] = []

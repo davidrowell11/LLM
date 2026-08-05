@@ -9,11 +9,19 @@ from llm_agent.topics import TopicQueue
 
 
 class FakeAgent:
-    def __init__(self, notes=None, follow_ups=None, learn_error=None, proposals=None):
+    def __init__(
+        self,
+        notes=None,
+        follow_ups=None,
+        learn_error=None,
+        proposals=None,
+        reachable=True,
+    ):
         self._notes = notes if notes is not None else [("http://a", "a note")]
         self._follow_ups = follow_ups or []
         self._learn_error = learn_error
         self._proposals = proposals or []
+        self._reachable = reachable
         self.learned = []
         self.suggested = []
         self.propose_calls = 0
@@ -26,7 +34,9 @@ class FakeAgent:
         self.learned.append(topic)
         if self._learn_error:
             raise self._learn_error
-        return LearnResult(topic=topic, notes_added=list(self._notes))
+        return LearnResult(
+            topic=topic, notes_added=list(self._notes), reachable=self._reachable
+        )
 
     def suggest_follow_up_topics(self, topic, notes):
         self.suggested.append(topic)
@@ -74,12 +84,51 @@ def test_run_once_skips_follow_ups_when_nothing_learned(queue):
     assert queue.pending_count() == 0
 
 
-def test_run_once_survives_llm_error(queue):
+def test_run_once_requeues_topic_when_ollama_is_down(queue):
     queue.add("cats")
     agent = FakeAgent(learn_error=OllamaError("ollama is down"))
 
-    # Should consume the topic and report progress rather than crash the loop.
     assert daemon.run_once(agent, queue) is True
+    # The topic isn't the reason this failed, so it must survive for a retry.
+    assert [t.topic for t in queue.pending()] == ["cats"]
+
+
+def test_run_once_requeues_topic_when_web_unreachable(queue):
+    """The boot case: daemon starts before the network is up."""
+    queue.add("cats")
+    agent = FakeAgent(notes=[], reachable=False)
+
+    assert daemon.run_once(agent, queue) is True
+    assert [t.topic for t in queue.pending()] == ["cats"]
+
+
+def test_offline_boot_does_not_destroy_the_queue(queue):
+    """Regression: an offline daemon used to silently consume every topic."""
+    for topic in ("alpha", "beta", "gamma"):
+        queue.add(topic)
+    agent = FakeAgent(notes=[], reachable=False)
+
+    for _ in range(3):
+        daemon.run_once(agent, queue)
+
+    assert {t.topic for t in queue.pending()} == {"alpha", "beta", "gamma"}
+
+
+def test_topic_is_abandoned_after_repeated_failures(queue):
+    """A topic that always fails must not be retried forever."""
+    queue.add("cats")
+    agent = FakeAgent(notes=[], reachable=False)
+
+    for _ in range(config.CURIOSITY_MAX_ATTEMPTS + 2):
+        daemon.run_once(agent, queue)
+
+    assert queue.pending_count() == 0
+
+
+def test_successful_research_still_completes_the_topic(queue):
+    queue.add("cats")
+    daemon.run_once(FakeAgent(), queue)
+
     assert queue.pending_count() == 0
 
 

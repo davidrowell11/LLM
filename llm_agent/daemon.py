@@ -42,7 +42,17 @@ def run_once(agent: Agent, queue: TopicQueue) -> bool:
     try:
         result = agent.learn(next_topic.topic)
     except OllamaError as exc:
-        _log(f"error researching '{next_topic.topic}': {exc}")
+        _log(f"Ollama unavailable while researching '{next_topic.topic}': {exc}")
+        _retry_or_give_up(queue, next_topic)
+        return True
+
+    if not result.reachable:
+        # Couldn't reach the web at all -- this says nothing about the topic,
+        # so putting it back is the only way it ever gets researched. Without
+        # this, a daemon starting before the network is up silently destroys
+        # everything queued.
+        _log(f"web unreachable while researching '{next_topic.topic}'")
+        _retry_or_give_up(queue, next_topic)
         return True
 
     _log(f"saved {len(result.notes_added)} note(s) for '{next_topic.topic}'")
@@ -57,6 +67,13 @@ def run_once(agent: Agent, queue: TopicQueue) -> bool:
             if queue.add(candidate):
                 _log(f"queued follow-up topic: {candidate}")
     return True
+
+
+def _retry_or_give_up(queue: TopicQueue, topic) -> None:
+    if queue.requeue(topic.id):
+        _log(f"will retry '{topic.topic}' later (attempt {topic.attempts + 1})")
+    else:
+        _log(f"giving up on '{topic.topic}' after {config.CURIOSITY_MAX_ATTEMPTS} attempts")
 
 
 def replenish(agent: Agent, queue: TopicQueue) -> int:

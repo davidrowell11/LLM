@@ -83,11 +83,23 @@ def test_search_respects_num_results(monkeypatch):
     assert len(search("cats", num_results=1)) == 1
 
 
-def test_search_returns_empty_on_network_error(monkeypatch):
+def test_search_raises_on_network_error(monkeypatch):
+    """Must be distinguishable from a search that simply matched nothing."""
+
     def boom(*a, **k):
         raise web_search.requests.ConnectionError("offline")
 
     monkeypatch.setattr(web_search.requests, "post", boom)
+    with pytest.raises(web_search.SearchError):
+        search("cats")
+
+
+def test_search_returns_empty_when_nothing_matches(monkeypatch):
+    monkeypatch.setattr(
+        web_search.requests,
+        "post",
+        lambda *a, **k: FakeResponse("<html><body>no results</body></html>"),
+    )
     assert search("cats") == []
 
 

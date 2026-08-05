@@ -100,12 +100,39 @@ In the REPL:
 ## Autonomous background research
 
 To have Cortana keep learning with no interaction at all, run the daemon in
-another terminal tab (or under `nohup`/cron/systemd):
+another terminal tab:
 
 ```bash
 source .venv/bin/activate
 python -m llm_agent.daemon "topic one" "topic two"   # seed topics optional
 ```
+
+### Running it automatically (no terminal)
+
+To have it start by itself, install it as a service — once, then never again:
+
+```bash
+./install-service.sh
+```
+
+It will start with the Linux container from then on. Useful commands:
+
+```bash
+systemctl status cortana-daemon      # is it running?
+journalctl -u cortana-daemon -f      # watch what it's learning
+sudo systemctl disable --now cortana-daemon   # turn it off
+```
+
+**What "automatic" can and can't mean here:** the Crostini container only
+runs while ChromeOS's Linux is running — ChromeOS starts it when you open a
+Linux app and stops it when Linux shuts down or the Chromebook powers off.
+So this starts with no command from you, but it can't research while the
+Chromebook is off. Nothing installed *inside* the container can change that.
+
+The installer also creates an `ollama.service` if one doesn't exist, since
+the daemon needs a model server. It uses `Wants=` rather than `Requires=`,
+so a slow or missing Ollama delays research but never prevents the daemon
+from starting.
 
 Each cycle it pops a pending topic, researches it, saves notes, asks the
 model which related topics are worth exploring next, and queues those.
@@ -117,11 +144,18 @@ asks the model to propose entirely new directions based on what's already in
 memory, so it keeps going indefinitely. On a cold start with an empty queue
 it seeds itself from `SEED_TOPICS`.
 
+**Being offline doesn't cost it anything.** A topic is only marked researched
+if the web was actually reachable. If the daemon starts before the network is
+up — the normal case when it runs at boot — topics go back on the queue and
+are retried, up to `CURIOSITY_MAX_ATTEMPTS` times, rather than being consumed
+and lost forever.
+
 It's bounded on purpose, since nothing supervises it turn by turn:
 
 - `CURIOSITY_INTERVAL_SECONDS` (default 1800 = 30 min) paces research.
 - `CURIOSITY_MAX_QUEUE_SIZE` (default 50) caps pending topics.
 - `CURIOSITY_FOLLOW_UPS_PER_TOPIC` (default 2) caps topics spawned per pass.
+- `CURIOSITY_MAX_ATTEMPTS` (default 5) stops a failing topic retrying forever.
 - Self-replenishment fires at most once per drain, not once per poll.
 
 Every action is logged with a timestamp so you can see exactly what it did
@@ -130,13 +164,31 @@ while you weren't watching. Stop it any time with Ctrl+C.
 The CLI and daemon can run simultaneously — the database uses WAL mode so
 `/curious` works while the daemon is mid-write.
 
-### Disk growth
+### Disk and speed as memory grows
 
-Each note costs ~17KB, mostly the embedding vector. Running the daemon
-non-stop at defaults is roughly **3MB/day (~1.1GB/year)** worst case. If
-that matters on your Chromebook, raise `CURIOSITY_INTERVAL_SECONDS` or lower
-`SEARCH_RESULTS`. Exact-duplicate notes are discarded, so restating the same
-fact doesn't accumulate.
+Embeddings are stored as raw float32 blobs and searched with a single
+vectorised matrix multiply. Measured against the obvious JSON-text approach
+at 768 dimensions, that is **~50-60x faster to scan and ~4x smaller on disk**:
+
+| Notes | JSON scan | Blob scan | JSON size | Blob size |
+|---|---|---|---|---|
+| 1,000 | 255 ms | 5 ms | 17 MB | 5 MB |
+| 5,000 | 1,257 ms | 20 ms | 86 MB | 23 MB |
+| 20,000 | 5,029 ms | 83 ms | 344 MB | 94 MB |
+
+This matters because the daemon accumulates indefinitely: a month of
+unattended research reaches several thousand notes, and the scan runs on
+*every* chat turn before the model starts generating. (Figures are from an
+x86 machine; a Chromebook, especially ARM, is several times slower.)
+
+A database written by an older version is converted automatically the first
+time it's opened — a one-time pause of a few seconds for a large one — and
+vacuumed so the space is actually reclaimed.
+
+Each note costs ~4KB. Running the daemon non-stop at defaults is roughly
+**0.8MB/day (~290MB/year)** worst case. To slow that down, raise
+`CURIOSITY_INTERVAL_SECONDS` or lower `SEARCH_RESULTS`. Exact-duplicate
+notes are discarded, so restating a known fact doesn't accumulate.
 
 ## Configuration
 
@@ -156,6 +208,7 @@ All settings are environment variables (see `llm_agent/config.py`):
 | `CURIOSITY_IDLE_POLL_SECONDS` | `60` | Poll rate while the queue is empty |
 | `CURIOSITY_MAX_QUEUE_SIZE` | `50` | Max pending topics |
 | `CURIOSITY_FOLLOW_UPS_PER_TOPIC` | `2` | Max topics spawned per pass |
+| `CURIOSITY_MAX_ATTEMPTS` | `5` | Retries before abandoning a failing topic |
 | `SEED_TOPICS` | 3 defaults | Semicolon-separated cold-start topics; `""` disables |
 | `DB_BUSY_TIMEOUT_SECONDS` | `30` | How long a writer waits for the DB lock |
 
@@ -171,7 +224,9 @@ llm_agent/
   topics.py       persistent queue of topics for the daemon
   daemon.py       autonomous loop: research, queue follow-ups, self-replenish
   cli.py          interactive REPL
-tests/            62 tests, no network or Ollama required
+setup.sh          one-time install (system packages, venv, Ollama, models)
+install-service.sh  optional: run the daemon automatically as a service
+tests/            77 tests, no network or Ollama required
 ```
 
 ## Testing
@@ -188,11 +243,12 @@ runs without Ollama installed and without an internet connection.
 
 - **Search is scraping, not an API.** It uses DuckDuckGo's no-JavaScript
   HTML endpoint, which needs no API key but may break if their markup
-  changes. `web_search.search()` returns `[]` on failure rather than
-  crashing, so a break degrades to "finds nothing" rather than an error.
-- **Memory search is a linear scan.** All embeddings are loaded and compared
-  on every search. Fine for hundreds to low thousands of notes; it is not
-  built to scale past that.
+  changes. If that happens it surfaces as topics being retried and then
+  abandoned, with `web unreachable` in the log — not a crash.
+- **Memory search is a linear scan.** Every embedding is compared on each
+  search. The vectorised implementation keeps that well under 100ms into the
+  tens of thousands of notes, but it is not an approximate-nearest-neighbour
+  index and won't scale to millions.
 - **Notes are only as good as the model writing them.** A 1–3B model
   summarizing a page will sometimes be vague or wrong, and a wrong note
   becomes context for future answers. Sources are stored alongside every

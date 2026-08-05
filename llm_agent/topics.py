@@ -19,6 +19,7 @@ class Topic:
     topic: str
     status: str
     created_at: str
+    attempts: int = 0
 
 
 class TopicQueue:
@@ -36,11 +37,23 @@ class TopicQueue:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 topic TEXT NOT NULL UNIQUE,
                 status TEXT NOT NULL DEFAULT 'pending',
-                created_at TEXT NOT NULL
+                created_at TEXT NOT NULL,
+                attempts INTEGER NOT NULL DEFAULT 0
             )
             """
         )
+        self._add_missing_columns()
         self._conn.commit()
+
+    def _add_missing_columns(self) -> None:
+        """Bring a database created by an earlier version up to date."""
+        existing = {
+            row[1] for row in self._conn.execute("PRAGMA table_info(topics)")
+        }
+        if "attempts" not in existing:
+            self._conn.execute(
+                "ALTER TABLE topics ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0"
+            )
 
     def close(self) -> None:
         self._conn.close()
@@ -65,14 +78,43 @@ class TopicQueue:
 
     def pop_next(self) -> Optional[Topic]:
         row = self._conn.execute(
-            "SELECT id, topic, status, created_at FROM topics "
+            "SELECT id, topic, status, created_at, attempts FROM topics "
             "WHERE status = 'pending' ORDER BY id ASC LIMIT 1"
         ).fetchone()
         if not row:
             return None
         self._conn.execute("UPDATE topics SET status = 'done' WHERE id = ?", (row[0],))
         self._conn.commit()
-        return Topic(id=row[0], topic=row[1], status="done", created_at=row[3])
+        return Topic(
+            id=row[0], topic=row[1], status="done", created_at=row[3], attempts=row[4]
+        )
+
+    def requeue(self, topic_id: int) -> bool:
+        """Put a topic back as pending after a failure it wasn't responsible for.
+
+        Returns False once it has been retried too many times, so a topic that
+        always fails can't be retried forever.
+        """
+        row = self._conn.execute(
+            "SELECT attempts FROM topics WHERE id = ?", (topic_id,)
+        ).fetchone()
+        if row is None:
+            return False
+
+        attempts = row[0] + 1
+        if attempts > config.CURIOSITY_MAX_ATTEMPTS:
+            self._conn.execute(
+                "UPDATE topics SET attempts = ? WHERE id = ?", (attempts, topic_id)
+            )
+            self._conn.commit()
+            return False
+
+        self._conn.execute(
+            "UPDATE topics SET status = 'pending', attempts = ? WHERE id = ?",
+            (attempts, topic_id),
+        )
+        self._conn.commit()
+        return True
 
     def pending_count(self) -> int:
         return self._conn.execute(
@@ -81,8 +123,11 @@ class TopicQueue:
 
     def pending(self, limit: int = 20) -> List[Topic]:
         rows = self._conn.execute(
-            "SELECT id, topic, status, created_at FROM topics "
+            "SELECT id, topic, status, created_at, attempts FROM topics "
             "WHERE status = 'pending' ORDER BY id ASC LIMIT ?",
             (limit,),
         ).fetchall()
-        return [Topic(id=r[0], topic=r[1], status=r[2], created_at=r[3]) for r in rows]
+        return [
+            Topic(id=r[0], topic=r[1], status=r[2], created_at=r[3], attempts=r[4])
+            for r in rows
+        ]
