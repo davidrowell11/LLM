@@ -1,9 +1,25 @@
 # Cortana
 
-A local, self-improving chat assistant that runs entirely inside a
-Chromebook's Linux (Crostini) container. It uses [Ollama](https://ollama.com)
-to run a small quantized model on-device, and grows a local knowledge base
-over time by researching the web — including on its own, unprompted.
+A local, self-improving AI assistant for Chromebooks. It runs a small
+quantized model on-device via [Ollama](https://ollama.com), opens as a real
+app from the ChromeOS launcher, and grows a local knowledge base over time by
+researching the web — including on its own, unprompted.
+
+![The Cortana app](assets/screenshot.png)
+
+## Install
+
+```bash
+git clone <this repo> cortana
+cd cortana
+./install.sh
+```
+
+One command. It installs the system packages, builds the Python environment,
+installs Ollama and downloads a model sized to your Chromebook's RAM, adds
+Cortana to the ChromeOS launcher, and starts the background research daemon.
+
+Then open **Cortana** from the launcher — no terminal needed.
 
 ## How "self-improve" works here
 
@@ -39,28 +55,26 @@ scope here.
 - A Chromebook with Linux (Crostini) enabled:
   Settings → Advanced → Developers → Linux development environment.
 - ~4GB free disk space for the model (more if you let the daemon run for
-  months — see *Disk growth* below).
+  months — see *Disk and speed* below).
 - Works on both Intel/AMD and ARM Chromebooks.
 
-## Setup
+### What the installer handles
 
-```bash
-git clone <this repo> cortana
-cd cortana
-./setup.sh
-```
+These are the things that actually bite on a fresh Crostini container:
 
-`setup.sh` handles the things that actually bite on a fresh Crostini container:
+- Installs `python3-venv` and `python3-tk` — Debian ships `python3` **without**
+  the venv module (so `python3 -m venv` fails) and without the Tk bindings
+  (so the app has no window to draw into).
+- Detects RAM and picks a model that fits (see below).
+- Installs Ollama and starts the server, since Crostini doesn't reliably run
+  it as a systemd service.
+- Installs the launcher entry and the background research service.
 
-- Installs `python3-venv`, `python3-pip`, and `curl` — Debian ships `python3`
-  **without** the venv module, so `python3 -m venv` fails until you do this.
-- Detects your RAM and picks a model that fits (see below).
-- Creates the virtualenv and installs dependencies.
-- Installs Ollama, starts the server if it isn't running (Crostini doesn't
-  reliably run it as a systemd service), and pulls the models.
+The Python environment is built *before* anything that needs the Ollama
+server, so a failed model download still leaves you with a working install.
 
-The Python environment is set up *before* anything that needs the Ollama
-server, so a model-pull failure still leaves you with a working environment.
+Options: `./install.sh --no-service` (no background research) or
+`./install.sh --no-launcher` (no launcher entry).
 
 ### Model sizing
 
@@ -82,20 +96,29 @@ Override any time with `export CHAT_MODEL=llama3.2:3b`.
 
 ## Usage
 
+Open **Cortana** from the ChromeOS launcher. In the app:
+
+- Type in the box to chat. Relevant saved notes are pulled in automatically,
+  and Cortana researches the web on her own mid-answer when she doesn't know
+  something — you'll see a `↗ researched "…"` line when she does.
+- **Research…** — look something up right now.
+- **Queue…** — hand a topic to the background daemon for later.
+- **Memory** — how many notes are stored and where the database lives.
+
+The status bar shows what she's doing and how much she's learned. Model work
+runs on a background thread, so the window stays responsive even when a
+model is slow.
+
+### Terminal version
+
+The same assistant, if you prefer a REPL:
+
 ```bash
-source .venv/bin/activate
-python -m llm_agent.cli
+./.venv/bin/python -m llm_agent.cli
 ```
 
-In the REPL:
-
-- Type anything to chat. Relevant saved notes are pulled in automatically,
-  and Cortana may research the web on her own mid-answer.
-- `/learn <topic>` — research a topic right now.
-- `/curious <topic>` — queue a topic for the background daemon.
-- `/queue` — show what the daemon has waiting.
-- `/memory` — how many notes are stored, plus the most recent.
-- `/help`, `/exit`.
+Commands: `/learn <topic>`, `/curious <topic>`, `/queue`, `/memory`,
+`/help`, `/exit`.
 
 ## Autonomous background research
 
@@ -109,13 +132,13 @@ python -m llm_agent.daemon "topic one" "topic two"   # seed topics optional
 
 ### Running it automatically (no terminal)
 
-To have it start by itself, install it as a service — once, then never again:
+`install.sh` already set this up. If you skipped it:
 
 ```bash
 ./install-service.sh
 ```
 
-It will start with the Linux container from then on. Useful commands:
+It starts with the Linux container from then on. Useful commands:
 
 ```bash
 systemctl status cortana-daemon      # is it running?
@@ -223,21 +246,26 @@ llm_agent/
   agent.py        RAG chat, research, follow-up and new-topic proposals
   topics.py       persistent queue of topics for the daemon
   daemon.py       autonomous loop: research, queue follow-ups, self-replenish
+  gui.py          the desktop app (Tk, worker thread, never blocks the UI)
   cli.py          interactive REPL
-setup.sh          one-time install (system packages, venv, Ollama, models)
-install-service.sh  optional: run the daemon automatically as a service
-tests/            77 tests, no network or Ollama required
+install.sh        one-command installer -- calls the two below
+install-launcher.sh  ChromeOS launcher entry (.desktop + icon)
+install-service.sh   background research as a systemd service
+launch-cortana.sh    what the launcher icon runs
+tools/make_icon.py   renders the app icon (stdlib only, no Pillow)
+assets/           icon and screenshot
+tests/            83 tests, no network or Ollama required
 ```
 
 ## Testing
 
 ```bash
-source .venv/bin/activate
-pip install pytest && python -m pytest tests/ -q
+./.venv/bin/pip install pytest && ./.venv/bin/python -m pytest tests/ -q
 ```
 
-The suite is hermetic — the LLM and all network calls are stubbed, so it
-runs without Ollama installed and without an internet connection.
+The suite is hermetic — the LLM and all network calls are stubbed, so it runs
+without Ollama installed and without an internet connection. The GUI worker
+tests skip automatically where Tk isn't available.
 
 ## Known limitations
 

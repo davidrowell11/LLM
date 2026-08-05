@@ -4,3 +4,6 @@ __pycache__/
 data/*.db
 .DS_Store
 ollama.log
+
+# Model choice recorded by the installer
+.env
