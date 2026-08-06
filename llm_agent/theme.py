@@ -35,8 +35,11 @@ MUTED = "#97A6CE"
 DIM = "#62719F"
 ON_ACCENT = "#04122A"
 
-UI_FONTS = ["Inter", "Ubuntu", "Cantarell", "DejaVu Sans"]
-MONO_FONTS = ["JetBrains Mono", "Ubuntu Mono", "DejaVu Sans Mono"]
+# Roboto is what the rest of ChromeOS uses; the installer adds it, since a
+# bare Crostini container only has DejaVu and that alone makes the app look
+# a decade old.
+UI_FONTS = ["Roboto", "Inter", "Arimo", "Noto Sans", "Ubuntu", "DejaVu Sans"]
+MONO_FONTS = ["Roboto Mono", "JetBrains Mono", "Cousine", "DejaVu Sans Mono"]
 
 
 def pick(root, size, weight="normal", mono=False):
@@ -47,6 +50,104 @@ def pick(root, size, weight="normal", mono=False):
         if name in available:
             return tkfont.Font(root=root, family=name, size=size, weight=weight)
     return tkfont.Font(root=root, size=size, weight=weight)
+
+
+def rounded_points(x1, y1, x2, y2, r):
+    """Corner-doubling point list; with smooth=True this draws a rounded box."""
+    return [
+        x1 + r, y1, x2 - r, y1, x2, y1, x2, y1 + r,
+        x2, y2 - r, x2, y2, x2 - r, y2, x1 + r, y2,
+        x1, y2, x1, y2 - r, x1, y1 + r, x1, y1,
+    ]
+
+
+class PillButton(tk.Canvas):
+    """A rounded button. Tk's own Button is always a hard rectangle."""
+
+    def __init__(self, parent, text, command, *, font, bg, fg, hover,
+                 radius=None, padx=18, pady=9, surface=None):
+        self._font = font
+        self._bg = bg
+        self._fg = fg
+        self._hover = hover
+        self._command = command
+        self._enabled = True
+
+        surface = surface or BG
+        width = font.measure(text) + padx * 2
+        height = font.metrics("linespace") + pady * 2
+        self._radius = radius if radius is not None else height // 2
+
+        super().__init__(parent, width=width, height=height, bg=surface,
+                         highlightthickness=0, bd=0, takefocus=0,
+                         cursor="hand2")
+        self._shape = self.create_polygon(
+            rounded_points(0, 0, width, height, self._radius),
+            smooth=True, splinesteps=24, fill=bg,
+        )
+        self._label = self.create_text(
+            width / 2, height / 2, text=text, fill=fg, font=font
+        )
+
+        self.bind("<Enter>", self._on_enter)
+        self.bind("<Leave>", self._on_leave)
+        self.bind("<Button-1>", self._on_click)
+
+    def _on_enter(self, _event):
+        if self._enabled:
+            self.itemconfigure(self._shape, fill=self._hover)
+
+    def _on_leave(self, _event):
+        if self._enabled:
+            self.itemconfigure(self._shape, fill=self._bg)
+
+    def _on_click(self, _event):
+        if self._enabled and self._command:
+            self._command()
+
+    def set_enabled(self, enabled, disabled_bg=None, disabled_fg=None):
+        self._enabled = enabled
+        self.configure(cursor="hand2" if enabled else "")
+        self.itemconfigure(
+            self._shape, fill=self._bg if enabled else (disabled_bg or SURFACE_HI)
+        )
+        self.itemconfigure(
+            self._label, fill=self._fg if enabled else (disabled_fg or DIM)
+        )
+
+
+class RoundedPanel(tk.Canvas):
+    """A rounded container. The inner frame is inset so the canvas corners,
+    not the frame's square ones, are what you see."""
+
+    def __init__(self, parent, fill, radius=18, surface=None, inset=6):
+        super().__init__(parent, bg=surface or BG, highlightthickness=0, bd=0)
+        self._fill = fill
+        self._radius = radius
+        self._inset = inset
+        self._shape = None
+
+        self.body = tk.Frame(self, bg=fill)
+        self._window = self.create_window(
+            inset, 0, window=self.body, anchor="nw"
+        )
+        self.body.bind("<Configure>", self._on_body)
+        self.bind("<Configure>", self._on_resize)
+
+    def _on_body(self, event):
+        self.configure(height=event.height)
+
+    def _on_resize(self, event):
+        self.itemconfigure(
+            self._window, width=max(1, event.width - self._inset * 2)
+        )
+        if self._shape is not None:
+            self.delete(self._shape)
+        self._shape = self.create_polygon(
+            rounded_points(0, 0, event.width, event.height, self._radius),
+            smooth=True, splinesteps=24, fill=self._fill,
+        )
+        self.tag_lower(self._shape)
 
 
 def flat_button(parent, text, command, *, font, bg=SURFACE, fg=TEXT,

@@ -1,27 +1,74 @@
 """The message list.
 
-Built from individual widgets in a scrollable frame rather than a single Text
-widget. A Text tag paints its background across the entire line, so messages
-came out as full-width bands; real bubbles have to hug their own text, which
-means one widget per message.
+Bubbles are Canvas widgets rather than Labels or Text tags. A Text tag paints
+its background across the whole line, and a Label is always a hard rectangle;
+only a canvas can give a bubble that both hugs its text and has rounded
+corners, which is most of the difference between this looking like a chat app
+and looking like a form.
 
-The tradeoff is that Labels aren't selectable, so each bubble carries a
-right-click "Copy" instead.
+Selection isn't available on a canvas, so each bubble carries right-click Copy.
 """
 
 import tkinter as tk
 
 from . import theme
 
-BUBBLE_FRACTION = 0.62  # of the viewport width
-MIN_WRAP = 220
+BUBBLE_FRACTION = 0.60  # of the viewport width
+MIN_WRAP = 200
+RADIUS = 16
+PAD_X = 16
+PAD_Y = 12
+
+
+class Bubble(tk.Canvas):
+    """One message: rounded background sized to its own wrapped text."""
+
+    def __init__(self, parent, text, fill, fg, font, wrap):
+        super().__init__(
+            parent, bg=theme.BG, highlightthickness=0, bd=0, takefocus=0
+        )
+        self.text = text
+        self._fill = fill
+        self._font = font
+
+        self._shape = None
+        self._label = self.create_text(
+            PAD_X, PAD_Y, text=text, anchor="nw", width=wrap, fill=fg, font=font,
+        )
+        self.relayout(wrap)
+
+    def relayout(self, wrap):
+        """Resize to fit the text at the given wrap width, then redraw."""
+        self.itemconfigure(self._label, width=wrap)
+        bbox = self.bbox(self._label)
+        if not bbox:
+            return
+        width = bbox[2] - bbox[0] + PAD_X * 2
+        height = bbox[3] - bbox[1] + PAD_Y * 2
+        self.configure(width=width, height=height)
+
+        if self._shape is not None:
+            self.delete(self._shape)
+        self._shape = self._rounded(0, 0, width, height, RADIUS, self._fill)
+        self.tag_lower(self._shape)
+
+    def _rounded(self, x1, y1, x2, y2, r, fill):
+        # smooth=True over a point list that doubles back at each corner is
+        # the standard way to get rounded corners out of a canvas polygon.
+        points = [
+            x1 + r, y1, x2 - r, y1, x2, y1, x2, y1 + r,
+            x2, y2 - r, x2, y2, x2 - r, y2, x1 + r, y2,
+            x1, y2, x1, y2 - r, x1, y1 + r, x1, y1,
+        ]
+        return self.create_polygon(points, smooth=True, splinesteps=24, fill=fill)
 
 
 class Transcript(tk.Frame):
     def __init__(self, parent, fonts):
         super().__init__(parent, bg=theme.BG)
         self.fonts = fonts
-        self._wrappable = []  # labels whose wraplength tracks the window
+        self._bubbles = []
+        self._wrappable = []  # plain labels (notices, errors)
 
         self.canvas = tk.Canvas(self, bg=theme.BG, highlightthickness=0, bd=0)
         self.canvas.pack(side="left", fill="both", expand=True)
@@ -49,11 +96,16 @@ class Transcript(tk.Frame):
     def _on_canvas_configure(self, event):
         self.canvas.itemconfigure(self._window, width=event.width)
         wrap = max(MIN_WRAP, int(event.width * BUBBLE_FRACTION))
+        for bubble in self._bubbles:
+            try:
+                bubble.relayout(wrap)
+            except tk.TclError:
+                pass  # destroyed by a conversation switch mid-resize
         for label in self._wrappable:
             try:
                 label.configure(wraplength=wrap)
             except tk.TclError:
-                pass  # destroyed by a conversation switch mid-resize
+                pass
 
     def _wrap(self):
         width = self.canvas.winfo_width() or 700
@@ -65,15 +117,14 @@ class Transcript(tk.Frame):
 
     def plain_text(self):
         """Everything currently displayed, as text. Used by tests."""
-        parts = []
+        parts = [b.text for b in self._bubbles]
 
         def walk(widget):
             for child in widget.winfo_children():
-                text = None
                 try:
                     text = child.cget("text")
                 except tk.TclError:
-                    pass
+                    text = None
                 if text:
                     parts.append(str(text))
                 walk(child)
@@ -84,6 +135,7 @@ class Transcript(tk.Frame):
     def clear(self):
         for child in self.inner.winfo_children():
             child.destroy()
+        self._bubbles.clear()
         self._wrappable.clear()
         self.canvas.yview_moveto(0.0)
 
@@ -91,7 +143,7 @@ class Transcript(tk.Frame):
 
     def _row(self, side):
         row = tk.Frame(self.inner, bg=theme.BG)
-        row.pack(fill="x", padx=26, pady=(0, 2), anchor="e" if side == "right" else "w")
+        row.pack(fill="x", padx=24, pady=(0, 2))
         return row
 
     def add_message(self, role, text, name=None, researched=""):
@@ -105,20 +157,17 @@ class Transcript(tk.Frame):
         tk.Label(
             header, text=name or ("You" if user else "Cortana"), bg=theme.BG,
             fg=theme.ACCENT if user else theme.VIOLET, font=self.fonts["name"],
-        ).pack(side=side, padx=2, pady=(14, 4))
+        ).pack(side=side, padx=6, pady=(16, 5))
 
         row = self._row(side)
-        bubble = tk.Frame(row, bg=theme.USER_BUBBLE if user else theme.SURFACE)
-        bubble.pack(side=side)
-
-        label = tk.Label(
-            bubble, text=str(text).strip(), bg=bubble["bg"], fg=theme.TEXT,
-            font=self.fonts["body"], justify="left", anchor="w",
-            wraplength=self._wrap(), padx=16, pady=12,
+        bubble = Bubble(
+            row, str(text).strip(),
+            fill=theme.USER_BUBBLE if user else theme.SURFACE,
+            fg=theme.TEXT, font=self.fonts["body"], wrap=self._wrap(),
         )
-        label.pack()
-        self._wrappable.append(label)
-        self._attach_copy(label, str(text).strip())
+        bubble.pack(side=side)
+        self._bubbles.append(bubble)
+        self._attach_copy(bubble, str(text).strip())
         self.scroll_to_end()
 
     def add_research(self, query, notes=None):
@@ -129,7 +178,7 @@ class Transcript(tk.Frame):
         tk.Label(
             row, text=text, bg=theme.BG, fg=theme.ACCENT, font=self.fonts["mono"],
             anchor="w",
-        ).pack(side="left", pady=(12, 0), padx=2)
+        ).pack(side="left", pady=(14, 0), padx=6)
         self.scroll_to_end()
 
     def add_notice(self, text):
@@ -145,14 +194,14 @@ class Transcript(tk.Frame):
             font=self.fonts["sub"], justify="left", anchor="w",
             wraplength=self._wrap(),
         )
-        label.pack(side="left", pady=(12, 2), padx=2)
+        label.pack(side="left", pady=(14, 2), padx=6)
         self._wrappable.append(label)
         self.scroll_to_end()
 
     # --- copy ------------------------------------------------------------
 
     def _attach_copy(self, widget, text):
-        """Labels can't be selected, so offer an explicit copy instead."""
+        """A canvas has no selection, so offer an explicit copy instead."""
         def popup(event):
             menu = tk.Menu(
                 self, tearoff=0, bg=theme.SURFACE, fg=theme.TEXT,

@@ -52,6 +52,13 @@ INSTALL (about 10-20 minutes, mostly downloading the model)
      cd ~/cortana
      bash install.sh
 
+   Updating? If ChromeOS made a folder called "cortana (2)", just run it
+   from there -- the installer finds your existing install, updates it,
+   and keeps your chats. You do not need to rename or merge anything:
+
+     cd ~/"cortana (2)"
+     bash install.sh
+
    Use "bash install.sh", not "./install.sh" -- unzipping through the Files
    app removes the permission that lets a file run directly.
 

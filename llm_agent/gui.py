@@ -368,9 +368,9 @@ class CortanaApp:
         for label, cmd in (("Research", self._on_learn),
                            ("Queue", self._on_curious),
                            ("Memory", self._on_memory)):
-            theme.flat_button(
+            theme.PillButton(
                 actions, label, cmd, font=self.f_sub, bg=theme.SURFACE,
-                fg=theme.MUTED, hover=theme.RAISED, padx=14, pady=7,
+                fg=theme.MUTED, hover=theme.RAISED, padx=16, pady=8,
             ).pack(side="left", padx=4)
         tk.Frame(main, bg=theme.LINE, height=1).pack(fill="x")
 
@@ -406,10 +406,10 @@ class CortanaApp:
         chips = tk.Frame(inner, bg=theme.BG)
         chips.pack()
         for text in SUGGESTIONS:
-            theme.flat_button(
+            theme.PillButton(
                 chips, text, lambda t=text: self._use_suggestion(t),
                 font=self.f_row, bg=theme.SURFACE, fg=theme.MUTED,
-                hover=theme.RAISED, padx=14, pady=9,
+                hover=theme.RAISED, padx=18, pady=10,
             ).pack(side="left", padx=5)
 
     def _use_suggestion(self, text):
@@ -438,12 +438,9 @@ class CortanaApp:
         bar = tk.Frame(parent, bg=theme.BG)
         bar.pack(fill="x", side="bottom", padx=24, pady=(0, 6))
 
-        # highlightbackground gives the input a visible edge, which is the
-        # closest Tk gets to the rounded fields the rest of ChromeOS uses.
-        shell = tk.Frame(bar, bg=theme.SURFACE_HI, highlightthickness=1,
-                         highlightbackground=theme.RAISED,
-                         highlightcolor=theme.ACCENT_DIM)
-        shell.pack(fill="x", pady=8)
+        panel = theme.RoundedPanel(bar, fill=theme.SURFACE_HI, radius=22)
+        panel.pack(fill="x", pady=8)
+        shell = panel.body
 
         # The hint is a separate label rather than pre-filled text, so it can
         # never be mistaken for real input and sent as a message.
@@ -462,11 +459,12 @@ class CortanaApp:
         self.entry_var.trace_add("write", lambda *_: self._sync_hint())
         self._sync_hint()
 
-        self.send_btn = theme.flat_button(
+        self.send_btn = theme.PillButton(
             shell, "Send", self._on_send, font=self.f_name, bg=theme.ACCENT,
             fg=theme.ON_ACCENT, hover=theme.VIOLET, padx=22, pady=9,
+            surface=theme.SURFACE_HI,
         )
-        self.send_btn.pack(side="right", padx=8, pady=6)
+        self.send_btn.pack(side="right", padx=(6, 8), pady=7)
 
     def _build_statusbar(self, parent):
         bar = tk.Frame(parent, bg=theme.BG, height=24)
@@ -560,9 +558,8 @@ class CortanaApp:
 
     def _set_busy(self, busy, label="Thinking"):
         self.busy = busy
-        self.send_btn.configure(state="disabled" if busy else "normal",
-                                bg=theme.SURFACE_HI if busy else theme.ACCENT,
-                                fg=theme.DIM if busy else theme.ON_ACCENT)
+        self.send_btn.set_enabled(not busy, disabled_bg=theme.RAISED,
+                                  disabled_fg=theme.DIM)
         if busy:
             self._spinner_label = label
             self._spin()

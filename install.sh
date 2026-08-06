@@ -33,6 +33,28 @@ step() { printf '\n\033[36m==>\033[0m \033[1m%s\033[0m\n' "$1"; }
 # so restore it rather than failing on "permission denied".
 chmod +x "${REPO_DIR}"/*.sh 2>/dev/null || true
 
+# Unpacking a second copy alongside an existing one gets named "cortana (2)"
+# by the ChromeOS Files app. Running the installer from there would build a
+# rival install next to the real one, so adopt the existing install instead
+# of making the user merge folders by hand.
+if [ ! -d "${REPO_DIR}/.venv" ] && [ ! -f "${REPO_DIR}/data/memory.db" ]; then
+    for candidate in "$(dirname "${REPO_DIR}")"/*/; do
+        candidate="${candidate%/}"
+        [ "${candidate}" = "${REPO_DIR}" ] && continue
+        if [ -d "${candidate}/llm_agent" ] &&
+           { [ -d "${candidate}/.venv" ] || [ -f "${candidate}/data/memory.db" ]; }; then
+            step "Found your existing install"
+            echo "  at ${candidate}"
+            echo "  Updating it in place rather than installing a second copy."
+            cp -rf "${REPO_DIR}/." "${candidate}/"
+            DUPLICATE_DIR="${REPO_DIR}"
+            REPO_DIR="${candidate}"
+            cd "${REPO_DIR}"
+            break
+        fi
+    done
+fi
+
 if [ -d .venv ] || [ -f data/memory.db ]; then
     step "Updating an existing install"
     echo "Keeping your chats, memory and settings."
@@ -66,6 +88,9 @@ python3 -c "import ensurepip" >/dev/null 2>&1 || MISSING+=("python3-venv")
 python3 -c "import tkinter"   >/dev/null 2>&1 || MISSING+=("python3-tk")
 command -v pip3 >/dev/null 2>&1 || MISSING+=("python3-pip")
 command -v curl >/dev/null 2>&1 || MISSING+=("curl")
+# A bare Crostini container only ships DejaVu; Roboto is what the rest of
+# ChromeOS uses and makes the app look like it belongs on the device.
+fc-list 2>/dev/null | grep -qi roboto || MISSING+=("fonts-roboto")
 
 if [ ${#MISSING[@]} -gt 0 ]; then
     echo "Installing: ${MISSING[*]}"
@@ -160,6 +185,15 @@ if [ "${WANT_SERVICE}" -eq 1 ]; then
         sudo systemctl restart cortana-daemon.service >/dev/null 2>&1 \
             && echo "Restarted the research daemon on the new version."
     fi
+fi
+
+if [ -n "${DUPLICATE_DIR:-}" ]; then
+    cat <<EOF
+
+$(printf '\033[1;33m')Note:$(printf '\033[0m') your install lives at ${REPO_DIR}
+The folder you ran this from is now a leftover copy. Remove it with:
+    rm -rf "${DUPLICATE_DIR}"
+EOF
 fi
 
 cat <<EOF
