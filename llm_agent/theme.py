@@ -8,32 +8,35 @@ drifting back to the default grey.
 import tkinter as tk
 from tkinter import font as tkfont
 
-# Surfaces, darkest to lightest. The sidebar sits below the content area so
-# the conversation reads as the lit surface, with everything else receding.
-SIDEBAR = "#070B1B"
-BG = "#0B1024"
-SURFACE = "#182142"  # assistant bubbles, dialogs
-SURFACE_HI = "#1F2950"  # inputs
-RAISED = "#2A3766"  # hover
-LINE = "#1A2247"
+# Near-neutral charcoals rather than saturated navy. Tinting every surface
+# blue leaves the whole window one muddy value with nothing to separate the
+# panels; keeping the base neutral lets a single accent do the work.
+SIDEBAR = "#0E0E10"
+BG = "#151517"
+SURFACE = "#1D1D21"  # assistant bubbles, dialogs
+SURFACE_HI = "#232329"  # inputs
+RAISED = "#2C2C33"  # hover
+LINE = "#26262B"
+BORDER = "#31313A"  # 1px edge; definition without extra contrast
 
-SIDEBAR_HOVER = "#111834"
-SIDEBAR_ACTIVE = "#1C2751"
-# Deliberately more saturated than any assistant surface, so at a glance you
-# can tell your side of the conversation from hers without reading names.
-USER_BUBBLE = "#2C46A8"
+SIDEBAR_HOVER = "#1A1A1E"
+SIDEBAR_ACTIVE = "#26262C"
+# The brand cyan, deepened enough to carry white text. Your side of the
+# conversation is the only saturated thing on screen, so it reads instantly.
+USER_BUBBLE = "#0E7490"
+USER_BUBBLE_EDGE = "#1194B4"
 
 # Accents.
-ACCENT = "#35E0E6"
-ACCENT_DIM = "#1B9BA0"
-VIOLET = "#B39BFF"
-DANGER = "#FF8A8A"
+ACCENT = "#22D3EE"
+ACCENT_DIM = "#0E7490"
+VIOLET = "#C4B5FD"
+DANGER = "#F87171"
 
 # Type.
-TEXT = "#EAEFFF"
-MUTED = "#97A6CE"
-DIM = "#62719F"
-ON_ACCENT = "#04122A"
+TEXT = "#FAFAFA"
+MUTED = "#A1A1AA"
+DIM = "#71717A"
+ON_ACCENT = "#06282F"
 
 # Roboto is what the rest of ChromeOS uses; the installer adds it, since a
 # bare Crostini container only has DejaVu and that alone makes the app look

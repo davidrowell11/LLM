@@ -23,12 +23,13 @@ PAD_Y = 12
 class Bubble(tk.Canvas):
     """One message: rounded background sized to its own wrapped text."""
 
-    def __init__(self, parent, text, fill, fg, font, wrap):
+    def __init__(self, parent, text, fill, fg, font, wrap, edge=None):
         super().__init__(
             parent, bg=theme.BG, highlightthickness=0, bd=0, takefocus=0
         )
         self.text = text
         self._fill = fill
+        self._edge = edge or theme.BORDER
         self._font = font
 
         self._shape = None
@@ -49,10 +50,12 @@ class Bubble(tk.Canvas):
 
         if self._shape is not None:
             self.delete(self._shape)
-        self._shape = self._rounded(0, 0, width, height, RADIUS, self._fill)
+        # Inset by a pixel so the outline isn't clipped by the canvas edge.
+        self._shape = self._rounded(1, 1, width - 1, height - 1, RADIUS,
+                                    self._fill, self._edge)
         self.tag_lower(self._shape)
 
-    def _rounded(self, x1, y1, x2, y2, r, fill):
+    def _rounded(self, x1, y1, x2, y2, r, fill, edge):
         # smooth=True over a point list that doubles back at each corner is
         # the standard way to get rounded corners out of a canvas polygon.
         points = [
@@ -60,7 +63,8 @@ class Bubble(tk.Canvas):
             x2, y2 - r, x2, y2, x2 - r, y2, x1 + r, y2,
             x1, y2, x1, y2 - r, x1, y1 + r, x1, y1,
         ]
-        return self.create_polygon(points, smooth=True, splinesteps=24, fill=fill)
+        return self.create_polygon(points, smooth=True, splinesteps=24,
+                                   fill=fill, outline=edge, width=1)
 
 
 class Transcript(tk.Frame):
@@ -156,14 +160,15 @@ class Transcript(tk.Frame):
         header = self._row(side)
         tk.Label(
             header, text=name or ("You" if user else "Cortana"), bg=theme.BG,
-            fg=theme.ACCENT if user else theme.VIOLET, font=self.fonts["name"],
-        ).pack(side=side, padx=6, pady=(16, 5))
+            fg=theme.DIM, font=self.fonts["sub"],
+        ).pack(side=side, padx=8, pady=(16, 5))
 
         row = self._row(side)
         bubble = Bubble(
             row, str(text).strip(),
             fill=theme.USER_BUBBLE if user else theme.SURFACE,
             fg=theme.TEXT, font=self.fonts["body"], wrap=self._wrap(),
+            edge=theme.USER_BUBBLE_EDGE if user else theme.BORDER,
         )
         bubble.pack(side=side)
         self._bubbles.append(bubble)
@@ -172,13 +177,15 @@ class Transcript(tk.Frame):
 
     def add_research(self, query, notes=None):
         row = self._row("left")
-        text = f"↗ researched “{query}”"
-        if notes is not None:
-            text += f" · {notes} note(s) saved"
-        tk.Label(
-            row, text=text, bg=theme.BG, fg=theme.ACCENT, font=self.fonts["mono"],
-            anchor="w",
-        ).pack(side="left", pady=(14, 0), padx=6)
+        text = f"searched the web for “{query}”"
+        if notes:
+            text += f" · saved {notes} note(s)"
+        chip = Bubble(
+            row, text, fill=theme.SURFACE, fg=theme.MUTED,
+            font=self.fonts["sub"], wrap=self._wrap(), edge=theme.BORDER,
+        )
+        chip.pack(side="left", pady=(14, 0), padx=6)
+        self._bubbles.append(chip)
         self.scroll_to_end()
 
     def add_notice(self, text):

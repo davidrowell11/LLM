@@ -65,19 +65,18 @@ class _Modal(tk.Toplevel):
         row = tk.Frame(self.body, bg=theme.SURFACE)
         row.pack(fill="x", pady=(18, 0))
 
-        font = theme.pick(self, 10, "bold")
-        cancel = theme.flat_button(
+        theme.PillButton(
             row, "Cancel", self._cancel, font=theme.pick(self, 10),
-            bg=theme.SURFACE_HI, fg=theme.MUTED, hover=theme.RAISED, padx=16,
-        )
-        cancel.pack(side="right")
+            bg=theme.SURFACE_HI, fg=theme.MUTED, hover=theme.RAISED,
+            padx=18, surface=theme.SURFACE,
+        ).pack(side="right")
 
-        ok = theme.flat_button(
-            row, ok_label, on_ok, font=font,
+        ok = theme.PillButton(
+            row, ok_label, on_ok, font=theme.pick(self, 10, "bold"),
             bg=theme.DANGER if danger else theme.ACCENT,
             fg=theme.ON_ACCENT,
-            hover=theme.VIOLET if not danger else "#FF6B6B",
-            padx=20,
+            hover="#FCA5A5" if danger else theme.ACCENT_DIM,
+            padx=22, surface=theme.SURFACE,
         )
         ok.pack(side="right", padx=(0, 8))
         return ok
@@ -117,6 +116,9 @@ class _TextPrompt(_Modal):
         entry.select_range(0, "end")
 
         self._buttons(ok_label, self._accept)
+        # Also bound on the dialog, so Return still confirms if focus has
+        # moved off the entry -- the other dialogs already behave that way.
+        self.bind("<Return>", lambda _e: self._accept())
         entry.focus_set()
 
     def _accept(self):
@@ -135,9 +137,9 @@ class _Confirm(_Modal):
             wraplength=self._width - 60,
         ).pack(fill="x")
 
-        ok = self._buttons(ok_label, self._accept, danger=danger)
-        ok.focus_set()
+        self._buttons(ok_label, self._accept, danger=danger)
         self.bind("<Return>", lambda _e: self._accept())
+        self.focus_set()
 
     def _accept(self):
         self.result = True
@@ -169,12 +171,12 @@ class _Info(_Modal):
 
         row = tk.Frame(self.body, bg=theme.SURFACE)
         row.pack(fill="x", pady=(18, 0))
-        done = theme.flat_button(
+        done = theme.PillButton(
             row, "Done", self._cancel, font=theme.pick(self, 10, "bold"),
-            bg=theme.ACCENT, fg=theme.ON_ACCENT, hover=theme.VIOLET, padx=20,
+            bg=theme.ACCENT, fg=theme.ON_ACCENT, hover=theme.ACCENT_DIM,
+            padx=22, surface=theme.SURFACE,
         )
         done.pack(side="right")
-        done.focus_set()
         self.bind("<Return>", lambda _e: self._cancel())
 
 

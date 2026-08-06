@@ -21,6 +21,7 @@ from typing import Any, Dict, List, Optional
 
 from . import config, dialogs, theme
 from .transcript import Transcript
+from .sidebar import ChatRow
 from .agent import Agent
 from .conversations import ConversationStore, Message
 from .llm_client import OllamaError
@@ -308,7 +309,7 @@ class CortanaApp:
 
         theme.flat_button(
             bar, "  +   New chat", self._on_new_chat, font=self.f_name,
-            bg=theme.SIDEBAR_ACTIVE, fg=theme.TEXT, hover=theme.USER_BUBBLE,
+            bg=theme.SURFACE_HI, fg=theme.TEXT, hover=theme.RAISED,
             padx=14, pady=11, anchor="w",
         ).pack(fill="x", padx=12, pady=(0, 14))
 
@@ -488,43 +489,18 @@ class CortanaApp:
         self._chat_rows.clear()
 
         for chat in chats:
-            selected = chat.id == self.conversation_id
-            bg = theme.SIDEBAR_ACTIVE if selected else theme.SIDEBAR
-            row = tk.Frame(self.chat_list, bg=bg)
-            row.pack(fill="x", pady=1, padx=4)
-
-            # A visible delete control: right-click menus aren't discoverable,
-            # and on a Chromebook trackpad they need a two-finger tap.
-            close = tk.Label(row, text="✕", bg=bg, fg=theme.DIM, font=self.f_sub,
-                             cursor="hand2", padx=9)
-            close.pack(side="right", fill="y")
-            close.bind("<Button-1>", lambda _e, c=chat: self._on_delete(c))
-            close.bind("<Enter>", lambda e: e.widget.configure(fg=theme.DANGER))
-            close.bind("<Leave>", lambda e: e.widget.configure(fg=theme.DIM))
-
-            body = tk.Frame(row, bg=bg)
-            body.pack(side="left", fill="x", expand=True)
-            title = tk.Label(body, text=self._elide(chat.title, 178), bg=bg,
-                             fg=theme.TEXT if selected else theme.MUTED,
-                             font=self.f_row, anchor="w", justify="left")
-            title.pack(fill="x", padx=10, pady=(8, 0))
-            when = tk.Label(body, text=relative_time(chat.updated_at), bg=bg,
-                            fg=theme.DIM, font=self.f_sub, anchor="w")
-            when.pack(fill="x", padx=10, pady=(0, 8))
-
-            clickable = (row, body, title, when)
-            for widget in clickable:
-                widget.bind("<Button-1>", lambda _e, i=chat.id: self._on_open_chat(i))
-                widget.configure(cursor="hand2")
-            for widget in clickable + (close,):
-                widget.bind("<Button-3>", lambda e, c=chat: self._chat_menu(e, c))
-
-            if not selected:
-                tinted = clickable + (close,)
-                for widget in tinted:
-                    widget.bind("<Enter>", lambda _e, w=tinted: self._hover(w, True))
-                    widget.bind("<Leave>", lambda _e, w=tinted: self._hover(w, False))
-            self._chat_rows[chat.id] = {"row": row, "widgets": clickable}
+            row = ChatRow(
+                self.chat_list, chat,
+                selected=chat.id == self.conversation_id,
+                title=self._elide(chat.title, 168),
+                subtitle=relative_time(chat.updated_at),
+                fonts={"row": self.f_row, "sub": self.f_sub},
+                on_open=self._on_open_chat,
+                on_delete=self._on_delete,
+                on_menu=self._chat_menu,
+            )
+            row.pack(fill="x", pady=1, padx=8)
+            self._chat_rows[chat.id] = row
 
     def _elide(self, text, max_px):
         """Trim to fit the sidebar, ending in an ellipsis rather than a hard cut."""
@@ -534,14 +510,6 @@ class CortanaApp:
         while trimmed and self.f_row.measure(trimmed + "…") > max_px:
             trimmed = trimmed[:-1]
         return (trimmed.rstrip() + "…") if trimmed else text[:1]
-
-    def _hover(self, widgets, entering):
-        colour = theme.SIDEBAR_HOVER if entering else theme.SIDEBAR
-        for widget in widgets:
-            try:
-                widget.configure(bg=colour)
-            except tk.TclError:
-                pass  # row was rebuilt while the pointer was over it
 
     def _chat_menu(self, event, chat):
         menu = tk.Menu(self.root, tearoff=0, bg=theme.SURFACE, fg=theme.TEXT,
