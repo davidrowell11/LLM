@@ -33,6 +33,30 @@ step() { printf '\n\033[36m==>\033[0m \033[1m%s\033[0m\n' "$1"; }
 # so restore it rather than failing on "permission denied".
 chmod +x "${REPO_DIR}"/*.sh 2>/dev/null || true
 
+if [ -d .venv ] || [ -f data/memory.db ]; then
+    step "Updating an existing install"
+    echo "Keeping your chats, memory and settings."
+
+    # Delete files an older release shipped that this one no longer does.
+    # Only the directories this project owns are touched -- data/, .venv/,
+    # .env and logs are never considered.
+    if [ -f MANIFEST.txt ]; then
+        REMOVED=0
+        while IFS= read -r found; do
+            found="${found#./}"
+            if ! grep -Fxq "${found}" MANIFEST.txt; then
+                rm -f "${found}"
+                echo "  removed obsolete ${found}"
+                REMOVED=$((REMOVED + 1))
+            fi
+        done < <(find llm_agent tools assets tests -type f 2>/dev/null)
+        [ "${REMOVED}" -eq 0 ] && echo "  nothing obsolete to remove."
+    fi
+
+    # Stale bytecode from deleted modules would otherwise still be importable.
+    find . -name "__pycache__" -type d -prune -exec rm -rf {} + 2>/dev/null || true
+fi
+
 step "Checking system packages"
 # Debian ships python3 without venv, and without the Tk bindings the app has
 # no window to draw into. Installing Tk before creating the venv means the
@@ -129,6 +153,13 @@ if [ "${WANT_SERVICE}" -eq 1 ]; then
         echo "!! Couldn't install the service; background research is off."
         echo "   Run it by hand with: ./.venv/bin/python -m llm_agent.daemon"
     }
+    # An already-running daemon holds the old code in memory, so an upgrade
+    # only takes effect once it restarts.
+    if command -v systemctl >/dev/null 2>&1 &&
+       systemctl cat cortana-daemon.service >/dev/null 2>&1; then
+        sudo systemctl restart cortana-daemon.service >/dev/null 2>&1 \
+            && echo "Restarted the research daemon on the new version."
+    fi
 fi
 
 cat <<EOF

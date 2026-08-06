@@ -17,34 +17,29 @@ import tkinter as tk
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from tkinter import font as tkfont
-from tkinter import messagebox, simpledialog
 from typing import Any, Dict, List, Optional
 
-from . import config
+from . import config, dialogs, theme
+from .transcript import Transcript
 from .agent import Agent
 from .conversations import ConversationStore, Message
 from .llm_client import OllamaError
 from .memory import Memory
 from .topics import TopicQueue
 
-# Palette, matching the launcher icon.
-BG = "#0D1230"
-SIDEBAR = "#090D24"
-SIDEBAR_HOVER = "#141C3F"
-SIDEBAR_ACTIVE = "#1E2A5A"
-SURFACE = "#161F44"
-SURFACE_HI = "#1E2A5A"
-USER_BUBBLE = "#243A7A"
-ACCENT = "#2DE2E6"
-VIOLET = "#A98BFA"
-TEXT = "#E6ECFF"
-MUTED = "#8FA0C8"
-DIM = "#5D6E9E"
-LINE = "#1B2450"
-
-SIDEBAR_WIDTH = 248
+SIDEBAR_WIDTH = 252
 ICON_PATH = Path(__file__).resolve().parent.parent / "assets" / "cortana.png"
+
+# ChromeOS matches a window to its launcher entry by WM_CLASS. Tk sets that
+# to "Tk" unless told otherwise, which is why the shelf showed a generic icon
+# instead of Cortana's -- this has to match StartupWMClass in the .desktop.
+WM_CLASS = "Cortana"
+
+SUGGESTIONS = [
+    "What can you do?",
+    "Explain how you remember things",
+    "What's new in ChromeOS?",
+]
 
 
 @dataclass
@@ -92,15 +87,6 @@ def relative_time(iso: str) -> str:
     return f"{int(seconds // 86400)}d ago"
 
 
-def _pick_font(root, candidates, size, weight="normal"):
-    """Use the nicest font actually installed rather than assuming one."""
-    available = set(tkfont.families(root))
-    for name in candidates:
-        if name in available:
-            return tkfont.Font(root=root, family=name, size=size, weight=weight)
-    return tkfont.Font(root=root, size=size, weight=weight)
-
-
 class Worker(threading.Thread):
     """Owns the agent and the stores; serialises all model work onto one thread."""
 
@@ -120,16 +106,11 @@ class Worker(threading.Thread):
             self.responses.put(Response(kind="fatal", error=str(exc)))
             return
 
-        # Reopen whatever was last in use, or start a first conversation.
         current = chats.most_recent()
         current_id = current.id if current else chats.create()
         self.responses.put(
-            Response(
-                kind="opened",
-                conversation_id=current_id,
-                messages=chats.messages(current_id),
-                chats=chats.list(),
-            )
+            Response(kind="opened", conversation_id=current_id,
+                     messages=chats.messages(current_id), chats=chats.list())
         )
         self._emit_stats(memory, topics)
 
@@ -168,15 +149,10 @@ class Worker(threading.Thread):
                 cid, "assistant", result.answer, researched=result.researched_query
             )
             self.responses.put(
-                Response(
-                    kind="chat",
-                    text=result.answer,
-                    researched=result.researched_query,
-                    notes_added=result.notes_added,
-                    conversation_id=cid,
-                    chats=chats.list(),
-                    clears_busy=True,
-                )
+                Response(kind="chat", text=result.answer,
+                         researched=result.researched_query,
+                         notes_added=result.notes_added, conversation_id=cid,
+                         chats=chats.list(), clears_busy=True)
             )
 
         elif request.kind == "new_chat":
@@ -230,11 +206,8 @@ class Worker(threading.Thread):
     def _emit_stats(self, memory, topics):
         try:
             self.responses.put(
-                Response(
-                    kind="stats",
-                    note_count=memory.count(),
-                    pending=topics.pending_count(),
-                )
+                Response(kind="stats", note_count=memory.count(),
+                         pending=topics.pending_count())
             )
         except Exception:  # noqa: BLE001 - stats are cosmetic
             pass
@@ -251,30 +224,60 @@ class CortanaApp:
         self._spinner_step = 0
         self._spinner_label = "Thinking"
         self._icon_image = None
+        self._icon_large = None
         self.conversation_id: Optional[int] = None
         self._chat_rows: Dict[int, Dict[str, Any]] = {}
         self._note_count = 0
         self._pending = 0
+        self._has_messages = False
 
         root.title(config.ASSISTANT_NAME)
-        root.configure(bg=BG)
-        root.geometry("1040x700")
-        root.minsize(640, 460)
+        root.configure(bg=theme.BG)
+        root.geometry("1060x720")
+        root.minsize(700, 480)
 
-        self.f_title = _pick_font(root, ["Inter", "Ubuntu", "DejaVu Sans"], 15, "bold")
-        self.f_sub = _pick_font(root, ["Inter", "Ubuntu", "DejaVu Sans"], 9)
-        self.f_body = _pick_font(root, ["Inter", "Ubuntu", "DejaVu Sans"], 12)
-        self.f_name = _pick_font(root, ["Inter", "Ubuntu", "DejaVu Sans"], 10, "bold")
-        self.f_row = _pick_font(root, ["Inter", "Ubuntu", "DejaVu Sans"], 10)
-        self.f_mono = _pick_font(root, ["JetBrains Mono", "DejaVu Sans Mono"], 9)
+        self.f_brand = theme.pick(root, 16, "bold")
+        self.f_title = theme.pick(root, 14, "bold")
+        self.f_hero = theme.pick(root, 26, "bold")
+        self.f_sub = theme.pick(root, 9)
+        self.f_body = theme.pick(root, 12)
+        self.f_name = theme.pick(root, 10, "bold")
+        self.f_row = theme.pick(root, 10)
+        self.f_mono = theme.pick(root, 9, mono=True)
 
         self._load_icon()
         self._build_sidebar()
         self._build_main()
 
+        self._bind_wheel()
         Worker(self.requests, self.responses).start()
         self.root.after(60, self._drain_responses)
         self.entry.focus_set()
+
+    def _bind_wheel(self):
+        """Send wheel events to whichever scrollable area the pointer is over."""
+        def target(event):
+            widget = self.root.winfo_containing(event.x_root, event.y_root)
+            while widget is not None:
+                if widget is self._chat_canvas:
+                    return self._chat_canvas
+                if widget is self.transcript_wrap.canvas or \
+                        widget is self.transcript_wrap.inner:
+                    return self.transcript_wrap.canvas
+                if widget is self.transcript_wrap:
+                    return self.transcript_wrap.canvas
+                widget = getattr(widget, "master", None)
+            return None
+
+        def scroll(event, direction):
+            canvas = target(event)
+            if canvas is not None:
+                canvas.yview_scroll(direction, "units")
+
+        self.root.bind_all("<Button-4>", lambda e: scroll(e, -1))
+        self.root.bind_all("<Button-5>", lambda e: scroll(e, 1))
+        self.root.bind_all(
+            "<MouseWheel>", lambda e: scroll(e, -1 if e.delta > 0 else 1))
 
     # --- chrome ---------------------------------------------------------
 
@@ -285,215 +288,192 @@ class CortanaApp:
             full = tk.PhotoImage(file=str(ICON_PATH))
             self.root.iconphoto(True, full)
             self._icon_image = full.subsample(16, 16)  # 512 -> 32px
+            self._icon_large = full.subsample(8, 8)  # 512 -> 64px
         except tk.TclError:
             self._icon_image = None
 
     def _build_sidebar(self):
-        bar = tk.Frame(self.root, bg=SIDEBAR, width=SIDEBAR_WIDTH)
+        bar = tk.Frame(self.root, bg=theme.SIDEBAR, width=SIDEBAR_WIDTH)
         bar.pack(side="left", fill="y")
         bar.pack_propagate(False)
 
-        brand = tk.Frame(bar, bg=SIDEBAR)
-        brand.pack(fill="x", padx=16, pady=(16, 12))
+        brand = tk.Frame(bar, bg=theme.SIDEBAR)
+        brand.pack(fill="x", padx=18, pady=(18, 14))
         if self._icon_image is not None:
-            tk.Label(brand, image=self._icon_image, bg=SIDEBAR).pack(side="left")
+            tk.Label(brand, image=self._icon_image, bg=theme.SIDEBAR).pack(side="left")
         tk.Label(
-            brand, text=config.ASSISTANT_NAME, bg=SIDEBAR, fg=TEXT, font=self.f_title
+            brand, text=config.ASSISTANT_NAME, bg=theme.SIDEBAR, fg=theme.TEXT,
+            font=self.f_brand,
         ).pack(side="left", padx=10)
 
-        new_btn = tk.Button(
-            bar,
-            text="+   New chat",
-            anchor="w",
-            command=self._on_new_chat,
-            bg=SIDEBAR_ACTIVE,
-            fg=TEXT,
-            activebackground=USER_BUBBLE,
-            activeforeground=TEXT,
-            relief="flat",
-            font=self.f_name,
-            padx=14,
-            pady=10,
-            cursor="hand2",
-            highlightthickness=0,
-            bd=0,
-        )
-        new_btn.pack(fill="x", padx=12, pady=(0, 12))
+        theme.flat_button(
+            bar, "  +   New chat", self._on_new_chat, font=self.f_name,
+            bg=theme.SIDEBAR_ACTIVE, fg=theme.TEXT, hover=theme.USER_BUBBLE,
+            padx=14, pady=11, anchor="w",
+        ).pack(fill="x", padx=12, pady=(0, 14))
 
         tk.Label(
-            bar, text="CHATS", bg=SIDEBAR, fg=DIM, font=self.f_sub, anchor="w"
-        ).pack(fill="x", padx=18, pady=(0, 4))
+            bar, text="CHATS", bg=theme.SIDEBAR, fg=theme.DIM, font=self.f_sub,
+            anchor="w",
+        ).pack(fill="x", padx=20, pady=(0, 4))
 
-        # Scrollable list, since conversations accumulate.
-        holder = tk.Frame(bar, bg=SIDEBAR)
+        holder = tk.Frame(bar, bg=theme.SIDEBAR)
         holder.pack(fill="both", expand=True, padx=6)
-        self._chat_canvas = tk.Canvas(
-            holder, bg=SIDEBAR, highlightthickness=0, bd=0
-        )
+        self._chat_canvas = tk.Canvas(holder, bg=theme.SIDEBAR,
+                                      highlightthickness=0, bd=0)
         self._chat_canvas.pack(side="left", fill="both", expand=True)
-        self.chat_list = tk.Frame(self._chat_canvas, bg=SIDEBAR)
+        self.chat_list = tk.Frame(self._chat_canvas, bg=theme.SIDEBAR)
         self._chat_window = self._chat_canvas.create_window(
             (0, 0), window=self.chat_list, anchor="nw"
         )
         self.chat_list.bind(
             "<Configure>",
             lambda _e: self._chat_canvas.configure(
-                scrollregion=self._chat_canvas.bbox("all")
-            ),
+                scrollregion=self._chat_canvas.bbox("all")),
         )
         self._chat_canvas.bind(
             "<Configure>",
             lambda e: self._chat_canvas.itemconfigure(self._chat_window, width=e.width),
         )
-        self._chat_canvas.bind_all(
-            "<Button-4>", lambda _e: self._chat_canvas.yview_scroll(-1, "units")
-        )
-        self._chat_canvas.bind_all(
-            "<Button-5>", lambda _e: self._chat_canvas.yview_scroll(1, "units")
-        )
+        # Wheel events are routed by pointer position in _bind_wheel; binding
+        # them per-canvas with bind_all would let whichever bound last win.
 
-        footer = tk.Frame(bar, bg=SIDEBAR)
-        footer.pack(fill="x", side="bottom", pady=12, padx=16)
-        tk.Frame(footer, bg=LINE, height=1).pack(fill="x", pady=(0, 10))
+        footer = tk.Frame(bar, bg=theme.SIDEBAR)
+        footer.pack(fill="x", side="bottom", pady=14, padx=18)
+        tk.Frame(footer, bg=theme.LINE, height=1).pack(fill="x", pady=(0, 10))
         self.memory_label = tk.Label(
-            footer, text="", bg=SIDEBAR, fg=MUTED, font=self.f_sub, anchor="w"
+            footer, text="", bg=theme.SIDEBAR, fg=theme.MUTED, font=self.f_sub,
+            anchor="w",
         )
         self.memory_label.pack(fill="x")
         tk.Label(
-            footer, text=f"local · {config.CHAT_MODEL}", bg=SIDEBAR, fg=DIM,
-            font=self.f_sub, anchor="w",
+            footer, text=f"local · {config.CHAT_MODEL}", bg=theme.SIDEBAR,
+            fg=theme.DIM, font=self.f_sub, anchor="w",
         ).pack(fill="x", pady=(2, 0))
 
     def _build_main(self):
-        main = tk.Frame(self.root, bg=BG)
+        main = tk.Frame(self.root, bg=theme.BG)
         main.pack(side="left", fill="both", expand=True)
 
-        # Top bar: current chat title and the research actions.
-        top = tk.Frame(main, bg=BG, height=58)
+        top = tk.Frame(main, bg=theme.BG, height=60)
         top.pack(fill="x")
         top.pack_propagate(False)
         self.title_label = tk.Label(
-            top, text="New chat", bg=BG, fg=TEXT, font=self.f_title, anchor="w"
+            top, text="New chat", bg=theme.BG, fg=theme.TEXT, font=self.f_title,
+            anchor="w",
         )
-        self.title_label.pack(side="left", padx=24)
-        actions = tk.Frame(top, bg=BG)
-        actions.pack(side="right", padx=18)
-        for label, cmd in (
-            ("Research…", self._on_learn),
-            ("Queue…", self._on_curious),
-            ("Memory", self._on_memory),
-        ):
-            self._ghost_button(actions, label, cmd).pack(side="left", padx=4)
-        tk.Frame(main, bg=LINE, height=1).pack(fill="x")
+        self.title_label.pack(side="left", padx=26)
+        actions = tk.Frame(top, bg=theme.BG)
+        actions.pack(side="right", padx=20)
+        for label, cmd in (("Research", self._on_learn),
+                           ("Queue", self._on_curious),
+                           ("Memory", self._on_memory)):
+            theme.flat_button(
+                actions, label, cmd, font=self.f_sub, bg=theme.SURFACE,
+                fg=theme.MUTED, hover=theme.RAISED, padx=14, pady=7,
+            ).pack(side="left", padx=4)
+        tk.Frame(main, bg=theme.LINE, height=1).pack(fill="x")
 
         # Fixed-height widgets must be packed before the transcript, which
         # expands to fill whatever is left -- otherwise they get squeezed out.
         self._build_statusbar(main)
         self._build_composer(main)
-        self._build_transcript(main)
 
-    def _ghost_button(self, parent, label, command):
-        return tk.Button(
-            parent, text=label, command=command,
-            bg=SURFACE, fg=MUTED,
-            activebackground=SURFACE_HI, activeforeground=TEXT,
-            relief="flat", font=self.f_sub,
-            padx=13, pady=7, cursor="hand2", highlightthickness=0, bd=0,
-        )
+        self._content = tk.Frame(main, bg=theme.BG)
+        self._content.pack(fill="both", expand=True)
+        self._build_welcome(self._content)
+        self._build_transcript(self._content)
+
+    # --- welcome view ----------------------------------------------------
+
+    def _build_welcome(self, parent):
+        self.welcome = tk.Frame(parent, bg=theme.BG)
+        inner = tk.Frame(self.welcome, bg=theme.BG)
+        inner.place(relx=0.5, rely=0.42, anchor="center")
+
+        if self._icon_large is not None:
+            tk.Label(inner, image=self._icon_large, bg=theme.BG).pack(pady=(0, 18))
+        tk.Label(
+            inner, text="How can I help?", bg=theme.BG, fg=theme.TEXT,
+            font=self.f_hero,
+        ).pack()
+        tk.Label(
+            inner,
+            text="I run entirely on this Chromebook and remember what I learn.",
+            bg=theme.BG, fg=theme.MUTED, font=self.f_body,
+        ).pack(pady=(10, 22))
+
+        chips = tk.Frame(inner, bg=theme.BG)
+        chips.pack()
+        for text in SUGGESTIONS:
+            theme.flat_button(
+                chips, text, lambda t=text: self._use_suggestion(t),
+                font=self.f_row, bg=theme.SURFACE, fg=theme.MUTED,
+                hover=theme.RAISED, padx=14, pady=9,
+            ).pack(side="left", padx=5)
+
+    def _use_suggestion(self, text):
+        self.entry_var.set(text)
+        self.entry.focus_set()
+        self.entry.icursor("end")
+
+    def _show_welcome(self, show):
+        if show:
+            self.transcript_wrap.pack_forget()
+            self.welcome.pack(fill="both", expand=True)
+        else:
+            self.welcome.pack_forget()
+            self.transcript_wrap.pack(fill="both", expand=True)
+
+    # --- transcript -------------------------------------------------------
 
     def _build_transcript(self, parent):
-        wrap = tk.Frame(parent, bg=BG)
-        wrap.pack(fill="both", expand=True)
-
-        self.text = tk.Text(
-            wrap, bg=BG, fg=TEXT, font=self.f_body, wrap="word", relief="flat",
-            highlightthickness=0, padx=26, pady=18, spacing1=2, spacing3=4,
-            cursor="arrow", insertbackground=BG,
+        self.transcript_wrap = Transcript(
+            parent,
+            fonts={"body": self.f_body, "name": self.f_name, "sub": self.f_sub,
+                   "mono": self.f_mono, "row": self.f_row},
         )
-        self.text.pack(side="left", fill="both", expand=True)
-
-        scroll = tk.Scrollbar(
-            wrap, command=self.text.yview, bg=BG, troughcolor=BG,
-            activebackground=DIM, relief="flat", bd=0, width=10,
-        )
-        scroll.pack(side="right", fill="y")
-        self.text.configure(yscrollcommand=scroll.set)
-
-        # Text can't do rounded corners, so bubbles are background colour plus
-        # generous margins and spacing.
-        self.text.tag_configure(
-            "user", background=USER_BUBBLE, foreground=TEXT,
-            lmargin1=150, lmargin2=150, rmargin=8,
-            spacing1=7, spacing3=7, borderwidth=10, relief="flat", justify="right",
-        )
-        self.text.tag_configure(
-            "assistant", background=SURFACE, foreground=TEXT,
-            lmargin1=8, lmargin2=8, rmargin=150,
-            spacing1=7, spacing3=7, borderwidth=10, relief="flat",
-        )
-        self.text.tag_configure(
-            "who_user", foreground=ACCENT, font=self.f_name,
-            lmargin1=150, lmargin2=150, rmargin=8, spacing1=14, justify="right",
-        )
-        self.text.tag_configure(
-            "who_assistant", foreground=VIOLET, font=self.f_name,
-            lmargin1=8, lmargin2=8, spacing1=14,
-        )
-        self.text.tag_configure(
-            "notice", foreground=MUTED, font=self.f_sub,
-            lmargin1=8, lmargin2=8, spacing1=10, spacing3=6,
-        )
-        self.text.tag_configure(
-            "research", foreground=ACCENT, font=self.f_mono,
-            lmargin1=8, lmargin2=8, spacing1=8,
-        )
-        self.text.tag_configure(
-            "error", foreground="#FF8A8A", font=self.f_sub,
-            lmargin1=8, lmargin2=8, spacing1=10, spacing3=6,
-        )
-        self.text.configure(state="disabled")
 
     def _build_composer(self, parent):
-        bar = tk.Frame(parent, bg=BG)
-        bar.pack(fill="x", side="bottom", padx=22, pady=(0, 4))
+        bar = tk.Frame(parent, bg=theme.BG)
+        bar.pack(fill="x", side="bottom", padx=24, pady=(0, 6))
 
-        shell = tk.Frame(bar, bg=SURFACE_HI)
+        # highlightbackground gives the input a visible edge, which is the
+        # closest Tk gets to the rounded fields the rest of ChromeOS uses.
+        shell = tk.Frame(bar, bg=theme.SURFACE_HI, highlightthickness=1,
+                         highlightbackground=theme.RAISED,
+                         highlightcolor=theme.ACCENT_DIM)
         shell.pack(fill="x", pady=8)
 
         # The hint is a separate label rather than pre-filled text, so it can
         # never be mistaken for real input and sent as a message.
         self.entry_var = tk.StringVar()
         self.entry = tk.Entry(
-            shell, textvariable=self.entry_var, bg=SURFACE_HI, fg=TEXT,
-            insertbackground=ACCENT, relief="flat", font=self.f_body,
-            highlightthickness=0, bd=0,
+            shell, textvariable=self.entry_var, bg=theme.SURFACE_HI,
+            fg=theme.TEXT, insertbackground=theme.ACCENT, relief="flat",
+            font=self.f_body, highlightthickness=0, bd=0,
         )
-        self.entry.pack(side="left", fill="x", expand=True, padx=16, pady=13)
+        self.entry.pack(side="left", fill="x", expand=True, padx=16, pady=14)
         self.entry.bind("<Return>", lambda _e: self._on_send())
 
-        self.hint = tk.Label(
-            shell, text=self.PLACEHOLDER, bg=SURFACE_HI, fg=DIM, font=self.f_body
-        )
+        self.hint = tk.Label(shell, text=self.PLACEHOLDER, bg=theme.SURFACE_HI,
+                             fg=theme.DIM, font=self.f_body)
         self.hint.bind("<Button-1>", lambda _e: self.entry.focus_set())
         self.entry_var.trace_add("write", lambda *_: self._sync_hint())
         self._sync_hint()
 
-        self.send_btn = tk.Button(
-            shell, text="Send", command=self._on_send,
-            bg=ACCENT, fg="#08122B",
-            activebackground=VIOLET, activeforeground="#08122B",
-            relief="flat", font=self.f_name, padx=20, pady=8,
-            cursor="hand2", highlightthickness=0, bd=0,
+        self.send_btn = theme.flat_button(
+            shell, "Send", self._on_send, font=self.f_name, bg=theme.ACCENT,
+            fg=theme.ON_ACCENT, hover=theme.VIOLET, padx=22, pady=9,
         )
         self.send_btn.pack(side="right", padx=8, pady=6)
 
     def _build_statusbar(self, parent):
-        bar = tk.Frame(parent, bg=BG, height=24)
+        bar = tk.Frame(parent, bg=theme.BG, height=24)
         bar.pack(fill="x", side="bottom")
-        self.status = tk.Label(
-            bar, text="Ready", bg=BG, fg=DIM, font=self.f_sub, anchor="w"
-        )
-        self.status.pack(side="left", padx=26, pady=(0, 8))
+        self.status = tk.Label(bar, text="Ready", bg=theme.BG, fg=theme.DIM,
+                               font=self.f_sub, anchor="w")
+        self.status.pack(side="left", padx=28, pady=(0, 8))
 
     def _sync_hint(self):
         """Show the hint only while the box is genuinely empty."""
@@ -511,39 +491,33 @@ class CortanaApp:
 
         for chat in chats:
             selected = chat.id == self.conversation_id
-            bg = SIDEBAR_ACTIVE if selected else SIDEBAR
+            bg = theme.SIDEBAR_ACTIVE if selected else theme.SIDEBAR
             row = tk.Frame(self.chat_list, bg=bg)
             row.pack(fill="x", pady=1, padx=4)
 
             # A visible delete control: right-click menus aren't discoverable,
             # and on a Chromebook trackpad they need a two-finger tap.
-            close = tk.Label(
-                row, text="✕", bg=bg, fg=DIM, font=self.f_sub, cursor="hand2",
-                padx=8,
-            )
+            close = tk.Label(row, text="✕", bg=bg, fg=theme.DIM, font=self.f_sub,
+                             cursor="hand2", padx=9)
             close.pack(side="right", fill="y")
             close.bind("<Button-1>", lambda _e, c=chat: self._on_delete(c))
-            close.bind("<Enter>", lambda e: e.widget.configure(fg="#FF8A8A"))
-            close.bind("<Leave>", lambda e: e.widget.configure(fg=DIM))
+            close.bind("<Enter>", lambda e: e.widget.configure(fg=theme.DANGER))
+            close.bind("<Leave>", lambda e: e.widget.configure(fg=theme.DIM))
 
             body = tk.Frame(row, bg=bg)
             body.pack(side="left", fill="x", expand=True)
-            title = tk.Label(
-                body, text=chat.title, bg=bg, fg=TEXT if selected else MUTED,
-                font=self.f_row, anchor="w", justify="left",
-            )
-            title.pack(fill="x", padx=10, pady=(7, 0))
-            when = tk.Label(
-                body, text=relative_time(chat.updated_at), bg=bg, fg=DIM,
-                font=self.f_sub, anchor="w",
-            )
-            when.pack(fill="x", padx=10, pady=(0, 7))
+            title = tk.Label(body, text=self._elide(chat.title, 178), bg=bg,
+                             fg=theme.TEXT if selected else theme.MUTED,
+                             font=self.f_row, anchor="w", justify="left")
+            title.pack(fill="x", padx=10, pady=(8, 0))
+            when = tk.Label(body, text=relative_time(chat.updated_at), bg=bg,
+                            fg=theme.DIM, font=self.f_sub, anchor="w")
+            when.pack(fill="x", padx=10, pady=(0, 8))
 
             clickable = (row, body, title, when)
             for widget in clickable:
                 widget.bind("<Button-1>", lambda _e, i=chat.id: self._on_open_chat(i))
                 widget.configure(cursor="hand2")
-            # Right-click anywhere on the row for rename/delete as well.
             for widget in clickable + (close,):
                 widget.bind("<Button-3>", lambda e, c=chat: self._chat_menu(e, c))
 
@@ -554,8 +528,17 @@ class CortanaApp:
                     widget.bind("<Leave>", lambda _e, w=tinted: self._hover(w, False))
             self._chat_rows[chat.id] = {"row": row, "widgets": clickable}
 
+    def _elide(self, text, max_px):
+        """Trim to fit the sidebar, ending in an ellipsis rather than a hard cut."""
+        if self.f_row.measure(text) <= max_px:
+            return text
+        trimmed = text
+        while trimmed and self.f_row.measure(trimmed + "…") > max_px:
+            trimmed = trimmed[:-1]
+        return (trimmed.rstrip() + "…") if trimmed else text[:1]
+
     def _hover(self, widgets, entering):
-        colour = SIDEBAR_HOVER if entering else SIDEBAR
+        colour = theme.SIDEBAR_HOVER if entering else theme.SIDEBAR
         for widget in widgets:
             try:
                 widget.configure(bg=colour)
@@ -563,8 +546,9 @@ class CortanaApp:
                 pass  # row was rebuilt while the pointer was over it
 
     def _chat_menu(self, event, chat):
-        menu = tk.Menu(self.root, tearoff=0, bg=SURFACE, fg=TEXT,
-                       activebackground=SURFACE_HI, activeforeground=TEXT, bd=0)
+        menu = tk.Menu(self.root, tearoff=0, bg=theme.SURFACE, fg=theme.TEXT,
+                       activebackground=theme.RAISED, activeforeground=theme.TEXT,
+                       bd=0, font=self.f_row)
         menu.add_command(label="Rename…", command=lambda: self._on_rename(chat))
         menu.add_command(label="Delete", command=lambda: self._on_delete(chat))
         try:
@@ -576,9 +560,9 @@ class CortanaApp:
 
     def _set_busy(self, busy, label="Thinking"):
         self.busy = busy
-        self.send_btn.configure(
-            state="disabled" if busy else "normal", bg=DIM if busy else ACCENT
-        )
+        self.send_btn.configure(state="disabled" if busy else "normal",
+                                bg=theme.SURFACE_HI if busy else theme.ACCENT,
+                                fg=theme.DIM if busy else theme.ON_ACCENT)
         if busy:
             self._spinner_label = label
             self._spin()
@@ -588,34 +572,38 @@ class CortanaApp:
     def _spin(self):
         if not self.busy:
             return
-        self.status.configure(text=f"{self._spinner_label}{'.' * (self._spinner_step % 4)}")
+        dots = "." * (self._spinner_step % 4)
+        self.status.configure(text=f"{self._spinner_label}{dots}")
         self._spinner_step += 1
         self.root.after(400, self._spin)
 
-    def _append(self, body, tag, who=None, who_tag=None):
-        # A blank line inside a bubble would inherit the bubble's background
-        # and its full above/below spacing, leaving a tall empty band. Each
-        # paragraph becomes its own logical line instead, so the tag's own
-        # spacing provides the separation.
-        body = "\n".join(p.strip() for p in str(body).split("\n") if p.strip())
-        self.text.configure(state="normal")
-        if who:
-            self.text.insert("end", f"{who}\n", who_tag)
-        self.text.insert("end", f"{body}\n", tag)
-        self.text.configure(state="disabled")
-        self.text.see("end")
+    def _reveal(self):
+        """Swap the welcome view out the first time anything is said."""
+        if not self._has_messages:
+            self._has_messages = True
+            self._show_welcome(False)
+
+    def _say(self, role, text, researched=""):
+        # Paragraph breaks are kept: a bubble sized to its own text renders a
+        # blank line as ordinary spacing, unlike the old full-width bands.
+        text = str(text).strip()
+        self._reveal()
+        self.transcript_wrap.add_message(
+            role, text, name="You" if role == "user" else config.ASSISTANT_NAME,
+            researched=researched,
+        )
+
+    def _notice(self, text):
+        self._reveal()
+        self.transcript_wrap.add_notice(text)
+
+    def _error(self, text):
+        self._reveal()
+        self.transcript_wrap.add_error(text)
 
     def _clear_transcript(self):
-        self.text.configure(state="normal")
-        self.text.delete("1.0", "end")
-        self.text.configure(state="disabled")
-
-    def _show_empty_state(self):
-        self._append(
-            "I run entirely on this Chromebook and remember what I learn. Ask me "
-            "anything — if I don't know, I'll research it myself and keep the notes.",
-            "assistant", who=config.ASSISTANT_NAME, who_tag="who_assistant",
-        )
+        self.transcript_wrap.clear()
+        self._has_messages = False
 
     def _on_send(self):
         if self.busy or self.conversation_id is None:
@@ -624,7 +612,7 @@ class CortanaApp:
         if not message:
             return
         self.entry_var.set("")
-        self._append(message, "user", who="You", who_tag="who_user")
+        self._say("user", message)
         self._set_busy(True, "Thinking")
         self.requests.put(
             Request(kind="chat", payload=message, conversation_id=self.conversation_id)
@@ -638,59 +626,61 @@ class CortanaApp:
     def _on_open_chat(self, conversation_id):
         if self.busy or conversation_id == self.conversation_id:
             return
-        self.requests.put(
-            Request(kind="open_chat", conversation_id=conversation_id)
-        )
+        self.requests.put(Request(kind="open_chat", conversation_id=conversation_id))
 
     def _on_delete(self, chat):
         if self.busy:
             return
-        if messagebox.askyesno(
-            "Delete chat", f"Delete “{chat.title}”?\n\n"
-            "Notes Cortana learned stay in her memory; only this conversation "
-            "is removed.", parent=self.root,
+        if dialogs.confirm(
+            self.root, "Delete chat",
+            f"Delete “{chat.title}”?\n\nNotes Cortana learned stay in her "
+            "memory — only this conversation is removed.",
         ):
-            self.requests.put(
-                Request(kind="delete_chat", conversation_id=chat.id)
-            )
+            self.requests.put(Request(kind="delete_chat", conversation_id=chat.id))
 
     def _on_rename(self, chat):
-        new_title = simpledialog.askstring(
-            "Rename chat", "New name:", initialvalue=chat.title, parent=self.root
+        new_title = dialogs.ask_text(
+            self.root, "Rename chat", "Name this conversation",
+            initial=chat.title, ok_label="Rename",
         )
         if new_title:
-            self.requests.put(
-                Request(kind="rename_chat", payload=new_title.strip(),
-                        conversation_id=chat.id)
-            )
+            self.requests.put(Request(kind="rename_chat", payload=new_title,
+                                      conversation_id=chat.id))
 
     def _on_learn(self):
         if self.busy:
             return
-        topic = simpledialog.askstring(
-            "Research now", "What should I research?", parent=self.root
+        topic = dialogs.ask_text(
+            self.root, "Research", "What should I look up?",
+            ok_label="Research",
+            placeholder="I'll search the web and keep notes on what I find.",
         )
         if not topic:
             return
-        self._append(f"Researching “{topic}” …", "notice")
+        self._notice(f"Researching “{topic}” …")
         self._set_busy(True, "Researching")
         self.requests.put(Request(kind="learn", payload=topic))
 
     def _on_curious(self):
-        topic = simpledialog.askstring(
-            "Queue for later", "What should I look into later?", parent=self.root
+        topic = dialogs.ask_text(
+            self.root, "Queue for later", "What should I look into later?",
+            ok_label="Queue",
+            placeholder="Researched quietly in the background, on a timer.",
         )
         if topic:
             self.requests.put(Request(kind="curious", payload=topic))
 
     def _on_memory(self):
-        messagebox.showinfo(
-            "Memory",
-            f"{self._note_count} note(s) stored.\n"
-            f"{self._pending} topic(s) queued for background research.\n\n"
-            f"Chat model: {config.CHAT_MODEL}\n"
-            f"Database: {config.MEMORY_DB_PATH}",
-            parent=self.root,
+        notes = "note" if self._note_count == 1 else "notes"
+        dialogs.show_info(
+            self.root, "Memory",
+            [("Learned", f"{self._note_count} {notes}"),
+             ("Queued", f"{self._pending} topic(s)"),
+             ("Chat model", config.CHAT_MODEL),
+             ("Embeddings", config.EMBED_MODEL)],
+            footer=f"Stored at {config.MEMORY_DB_PATH}\n\n"
+                   "Memory is shared across every chat, so deleting a "
+                   "conversation never makes her forget a fact.",
         )
 
     # --- worker plumbing -------------------------------------------------
@@ -710,8 +700,7 @@ class CortanaApp:
             notes = "note" if response.note_count == 1 else "notes"
             self.memory_label.configure(
                 text=f"{response.note_count} {notes} learned · "
-                     f"{response.pending} queued"
-            )
+                     f"{response.pending} queued")
             return
 
         if response.kind == "opened":
@@ -719,19 +708,10 @@ class CortanaApp:
             self._clear_transcript()
             if response.messages:
                 for message in response.messages:
-                    if message.role == "user":
-                        self._append(message.content, "user",
-                                     who="You", who_tag="who_user")
-                    else:
-                        if message.researched:
-                            self._append(
-                                f"↗ researched “{message.researched}”", "research"
-                            )
-                        self._append(message.content, "assistant",
-                                     who=config.ASSISTANT_NAME,
-                                     who_tag="who_assistant")
+                    self._say(message.role, message.content,
+                              researched=message.researched)
             else:
-                self._show_empty_state()
+                self._show_welcome(True)
             self._render_chat_list(response.chats)
             self._update_title(response.chats)
             self._set_busy(False)
@@ -743,24 +723,20 @@ class CortanaApp:
             return
 
         if response.kind == "chat":
+            self._reveal()
             if response.researched:
-                self._append(
-                    f"↗ researched “{response.researched}” · "
-                    f"{response.notes_added} note(s) saved", "research",
-                )
-            self._append(response.text, "assistant",
-                         who=config.ASSISTANT_NAME, who_tag="who_assistant")
+                self.transcript_wrap.add_research(
+                    response.researched, response.notes_added)
+            self._say("assistant", response.text)
             self._render_chat_list(response.chats)
             self._update_title(response.chats)
 
         elif response.kind == "notice":
-            self._append(response.text, "notice")
+            self._notice(response.text)
 
         elif response.kind in ("error", "fatal"):
-            self._append(
-                response.error if response.kind == "error"
-                else f"Couldn't start: {response.error}", "error",
-            )
+            self._error(response.error if response.kind == "error"
+                        else f"Couldn't start: {response.error}")
 
         if response.clears_busy:
             self._set_busy(False)
@@ -775,7 +751,9 @@ class CortanaApp:
 
 def main():
     try:
-        root = tk.Tk()
+        # className sets WM_CLASS, which is how ChromeOS ties this window to
+        # its launcher entry and shows the right icon in the shelf.
+        root = tk.Tk(className=WM_CLASS)
     except tk.TclError as exc:
         print(
             "Couldn't open a window. If you're on a Chromebook, install the Tk "

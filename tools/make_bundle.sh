@@ -93,6 +93,11 @@ EOF
 
 chmod +x "${STAGE}"/*.sh
 
+# A list of everything this release ships. install.sh uses it to delete files
+# left behind by an older version, so upgrading doesn't accumulate orphans.
+( cd "${STAGE}" && find llm_agent tools assets tests -type f | sort ) \
+    > "${STAGE}/MANIFEST.txt"
+
 cd "${OUT_DIR}"
 tar -czf cortana.tar.gz cortana
 if command -v zip >/dev/null 2>&1; then
