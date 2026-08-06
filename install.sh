@@ -5,9 +5,12 @@
 # and a right-sized model, the app in the ChromeOS launcher, and the
 # background research daemon running on its own.
 #
-#   ./install.sh                 full install
-#   ./install.sh --no-service    skip the background research daemon
-#   ./install.sh --no-launcher   skip the ChromeOS launcher entry
+#   bash install.sh                 full install
+#   bash install.sh --no-service    skip the background research daemon
+#   bash install.sh --no-launcher   skip the ChromeOS launcher entry
+#
+# Use "bash install.sh" rather than "./install.sh": unzipping through the
+# ChromeOS Files app strips the executable bit.
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -19,12 +22,16 @@ for arg in "$@"; do
     case "$arg" in
         --no-service) WANT_SERVICE=0 ;;
         --no-launcher) WANT_LAUNCHER=0 ;;
-        -h|--help) sed -n '2,12p' "$0"; exit 0 ;;
+        -h|--help) sed -n '2,14p' "$0" | sed 's/^# \?//'; exit 0 ;;
         *) echo "Unknown option: $arg" >&2; exit 1 ;;
     esac
 done
 
 step() { printf '\n\033[36m==>\033[0m \033[1m%s\033[0m\n' "$1"; }
+
+# Unpacking a .zip through the ChromeOS Files app drops the executable bit,
+# so restore it rather than failing on "permission denied".
+chmod +x "${REPO_DIR}"/*.sh 2>/dev/null || true
 
 step "Checking system packages"
 # Debian ships python3 without venv, and without the Tk bindings the app has
@@ -54,7 +61,7 @@ if [ -z "${CHAT_MODEL:-}" ]; then
     fi
 fi
 EMBED_MODEL="${EMBED_MODEL:-nomic-embed-text}"
-echo "Chat model: ${CHAT_MODEL}   (override with CHAT_MODEL=... ./install.sh)"
+echo "Chat model: ${CHAT_MODEL}   (override with CHAT_MODEL=... bash install.sh)"
 
 step "Building the Python environment"
 python3 -m venv .venv
@@ -113,12 +120,12 @@ fi
 
 if [ "${WANT_LAUNCHER}" -eq 1 ]; then
     step "Adding Cortana to the ChromeOS launcher"
-    CHAT_MODEL="${CHAT_MODEL}" ./install-launcher.sh
+    CHAT_MODEL="${CHAT_MODEL}" bash ./install-launcher.sh
 fi
 
 if [ "${WANT_SERVICE}" -eq 1 ]; then
     step "Setting up background research"
-    CHAT_MODEL="${CHAT_MODEL}" ./install-service.sh || {
+    CHAT_MODEL="${CHAT_MODEL}" bash ./install-service.sh || {
         echo "!! Couldn't install the service; background research is off."
         echo "   Run it by hand with: ./.venv/bin/python -m llm_agent.daemon"
     }
