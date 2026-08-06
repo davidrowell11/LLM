@@ -5,6 +5,7 @@ explicitly. Keeping the palette in one place is what stops the dialogs from
 drifting back to the default grey.
 """
 
+import tkinter as tk
 from tkinter import font as tkfont
 
 # Surfaces, darkest to lightest. The sidebar sits below the content area so
@@ -55,15 +56,24 @@ def flat_button(parent, text, command, *, font, bg=SURFACE, fg=TEXT,
     Tk's activebackground only applies while the mouse is *down*, so without
     explicit Enter/Leave bindings a flat button feels dead.
     """
-    import tkinter as tk
-
     button = tk.Button(
         parent, text=text, command=command, font=font,
         bg=bg, fg=fg, activebackground=hover, activeforeground=fg,
         relief="flat", bd=0, highlightthickness=0,
         padx=padx, pady=pady, cursor="hand2", **kwargs,
     )
-    button.bind("<Enter>", lambda _e: button.configure(bg=hover))
-    button.bind("<Leave>", lambda _e: button.configure(bg=bg))
-    button._resting_bg = bg  # so callers can re-apply after enabling/disabling
+
+    # A disabled button must not react, and must not be repainted on the way
+    # out either: restoring the resting colour would make a button that is
+    # still busy look enabled and clickable again.
+    def enter(_event):
+        if str(button.cget("state")) != "disabled":
+            button.configure(bg=hover)
+
+    def leave(_event):
+        if str(button.cget("state")) != "disabled":
+            button.configure(bg=bg)
+
+    button.bind("<Enter>", enter)
+    button.bind("<Leave>", leave)
     return button

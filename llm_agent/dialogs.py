@@ -45,7 +45,15 @@ class _Modal(tk.Toplevel):
     def _show(self):
         self._centre()
         self.deiconify()
-        self.grab_set()
+        # A window manager maps the window asynchronously, so grabbing right
+        # after deiconify can fail with "window not viewable". Waiting for
+        # visibility first avoids that; if the grab still fails the dialog
+        # simply isn't modal, which is far better than crashing.
+        try:
+            self.wait_visibility()
+            self.grab_set()
+        except tk.TclError:
+            pass
         self.wait_window()
         return self.result
 
