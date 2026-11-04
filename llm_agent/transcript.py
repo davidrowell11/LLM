@@ -221,7 +221,7 @@ class Transcript(tk.Frame):
             finally:
                 menu.grab_release()
 
-        widget.bind("<Button-3>", popup)
+        theme.bind_context_click(widget, popup)
 
     def _copy(self, text):
         self.clipboard_clear()

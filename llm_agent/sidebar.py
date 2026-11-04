@@ -52,7 +52,7 @@ class ChatRow(tk.Canvas):
         self.bind("<Leave>", self._leave)
         self.bind("<Motion>", self._motion)
         self.bind("<Button-1>", self._click)
-        self.bind("<Button-3>", lambda e: self._on_menu(e, self.chat))
+        theme.bind_context_click(self, lambda e: self._on_menu(e, self.chat))
 
     # --- painting --------------------------------------------------------
 

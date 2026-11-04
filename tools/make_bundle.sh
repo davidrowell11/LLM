@@ -31,8 +31,10 @@ cp "${REPO_DIR}"/assets/*.png "${STAGE}/assets/"
 cp "${REPO_DIR}"/tests/*.py "${STAGE}/tests/"
 
 cat > "${STAGE}/INSTALL.txt" <<'EOF'
-Cortana - a local AI assistant for Chromebooks
-==============================================
+Cortana - a local AI assistant for Chromebooks and Macs
+=======================================================
+
+(On a Mac? Skip to "ON A MAC" below.)
 
 WHAT YOU NEED FIRST
 -------------------
@@ -95,6 +97,32 @@ UNINSTALL
     rm ~/.local/share/applications/cortana.desktop
     rm -rf ~/cortana
 
+
+
+ON A MAC
+--------
+Works on Apple Silicon and Intel Macs, macOS 11 or newer.
+
+1. Put this "cortana" folder in your home folder (not Desktop, Documents
+   or Downloads -- macOS stops background apps reading those).
+2. Open Terminal and run:
+
+     cd ~/cortana
+     bash install.sh
+
+   If you have Homebrew (https://brew.sh) it installs Python and Ollama
+   for you. Without it, install Python from python.org and Ollama from
+   https://ollama.com/download first, then run the line above.
+
+3. Open Cortana from Launchpad or Spotlight.
+
+Background research log:   tail -f ~/cortana/daemon.log
+
+Uninstall on a Mac:
+    launchctl bootout gui/$(id -u)/local.cortana.daemon
+    rm ~/Library/LaunchAgents/local.cortana.daemon.plist
+    rm -rf ~/Applications/Cortana.app ~/cortana
+
 Full documentation is in README.md.
 EOF
 
@@ -114,7 +142,10 @@ else
 fi
 
 echo "Bundle built in ${OUT_DIR}:"
-find "${OUT_DIR}" -maxdepth 1 -type f -printf '  %f  %s bytes\n' | sort
+# Not find -printf: BSD find on macOS doesn't have it.
+for f in "${OUT_DIR}"/*; do
+    [ -f "${f}" ] && printf '  %s  %s bytes\n' "$(basename "${f}")" "$(wc -c < "${f}" | tr -d ' ')"
+done
 echo
 echo "Contents:"
 find cortana -type f | sort | sed 's/^/  /'

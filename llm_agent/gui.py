@@ -39,7 +39,7 @@ WM_CLASS = "Cortana"
 SUGGESTIONS = [
     "What can you do?",
     "Explain how you remember things",
-    "What's new in ChromeOS?",
+    "What's new in macOS?" if config.IS_MAC else "What's new in ChromeOS?",
 ]
 
 
@@ -400,7 +400,7 @@ class CortanaApp:
         ).pack()
         tk.Label(
             inner,
-            text="I run entirely on this Chromebook and remember what I learn.",
+            text=f"I run entirely on this {config.DEVICE_NAME} and remember what I learn.",
             bg=theme.BG, fg=theme.MUTED, font=self.f_body,
         ).pack(pady=(10, 22))
 
@@ -720,10 +720,13 @@ def main():
         # its launcher entry and shows the right icon in the shelf.
         root = tk.Tk(className=WM_CLASS)
     except tk.TclError as exc:
+        if config.IS_MAC:
+            fix = "On a Mac, install Python's Tk bindings with:\n  brew install python-tk\n"
+        else:
+            fix = ("If you're on a Chromebook, install the Tk bindings with:\n"
+                   "  sudo apt-get install -y python3-tk\n")
         print(
-            "Couldn't open a window. If you're on a Chromebook, install the Tk "
-            "bindings with:\n  sudo apt-get install -y python3-tk\n"
-            f"({exc})",
+            f"Couldn't open a window. {fix}({exc})",
             file=sys.stderr,
         )
         raise SystemExit(1)

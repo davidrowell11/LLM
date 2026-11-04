@@ -5,8 +5,11 @@ explicitly. Keeping the palette in one place is what stops the dialogs from
 drifting back to the default grey.
 """
 
+import sys
 import tkinter as tk
 from tkinter import font as tkfont
+
+IS_MAC = sys.platform == "darwin"
 
 # Near-neutral charcoals rather than saturated navy. Tinting every surface
 # blue leaves the whole window one muddy value with nothing to separate the
@@ -41,18 +44,46 @@ ON_ACCENT = "#06282F"
 # Roboto is what the rest of ChromeOS uses; the installer adds it, since a
 # bare Crostini container only has DejaVu and that alone makes the app look
 # a decade old.
-UI_FONTS = ["Roboto", "Inter", "Arimo", "Noto Sans", "Ubuntu", "DejaVu Sans"]
-MONO_FONTS = ["Roboto Mono", "JetBrains Mono", "Cousine", "DejaVu Sans Mono"]
+# On a Mac, Helvetica Neue and Menlo ship with the OS.
+UI_FONTS = ["Roboto", "Inter", "Arimo", "Noto Sans", "Ubuntu", "Helvetica Neue",
+            "DejaVu Sans"]
+MONO_FONTS = ["Roboto Mono", "JetBrains Mono", "Cousine", "Menlo",
+              "DejaVu Sans Mono"]
+
+# Tk on macOS maps a point to one pixel (72 dpi), where X11 Tk assumes 96 dpi.
+# Without this the same point sizes come out a quarter smaller on a Mac.
+MAC_FONT_SCALE = 96 / 72
+
+
+def font_size(size):
+    """The point size to ask Tk for, so text looks the same size everywhere."""
+    return round(size * MAC_FONT_SCALE) if IS_MAC else size
 
 
 def pick(root, size, weight="normal", mono=False):
     """Use the nicest font actually installed rather than assuming one."""
     candidates = MONO_FONTS if mono else UI_FONTS
     available = set(tkfont.families(root))
+    size = font_size(size)
     for name in candidates:
         if name in available:
             return tkfont.Font(root=root, family=name, size=size, weight=weight)
     return tkfont.Font(root=root, size=size, weight=weight)
+
+
+def bind_context_click(widget, handler):
+    """Bind the platform's "open a context menu" click.
+
+    Tk numbers mouse buttons differently on macOS: the right button is
+    Button-2 there, and Button-3 never fires. Mac users also expect
+    Control-click to do the same thing, since many trackpads have no
+    separate right button.
+    """
+    if IS_MAC:
+        widget.bind("<Button-2>", handler)
+        widget.bind("<Control-Button-1>", handler)
+    else:
+        widget.bind("<Button-3>", handler)
 
 
 def rounded_points(x1, y1, x2, y2, r):
@@ -159,7 +190,14 @@ def flat_button(parent, text, command, *, font, bg=SURFACE, fg=TEXT,
 
     Tk's activebackground only applies while the mouse is *down*, so without
     explicit Enter/Leave bindings a flat button feels dead.
+
+    On macOS a native tk.Button ignores bg and relief entirely and draws a
+    light Aqua button, which would turn this app's light-on-dark text
+    unreadable -- so there it's a Label that acts like a button instead.
     """
+    if IS_MAC:
+        return _label_button(parent, text, command, font=font, bg=bg, fg=fg,
+                             hover=hover, padx=padx, pady=pady, **kwargs)
     button = tk.Button(
         parent, text=text, command=command, font=font,
         bg=bg, fg=fg, activebackground=hover, activeforeground=fg,
@@ -180,4 +218,35 @@ def flat_button(parent, text, command, *, font, bg=SURFACE, fg=TEXT,
 
     button.bind("<Enter>", enter)
     button.bind("<Leave>", leave)
+    return button
+
+
+def _label_button(parent, text, command, *, font, bg, fg, hover, padx, pady,
+                  **kwargs):
+    """flat_button for macOS: a Label, which does honour its colours there."""
+    button = tk.Label(
+        parent, text=text, font=font, bg=bg, fg=fg,
+        activebackground=hover, activeforeground=fg,
+        bd=0, highlightthickness=0, padx=padx, pady=pady, cursor="hand2",
+        **kwargs,
+    )
+
+    def enabled():
+        return str(button.cget("state")) != "disabled"
+
+    def enter(_event):
+        if enabled():
+            button.configure(bg=hover)
+
+    def leave(_event):
+        if enabled():
+            button.configure(bg=bg)
+
+    def click(_event):
+        if enabled() and command:
+            command()
+
+    button.bind("<Enter>", enter)
+    button.bind("<Leave>", leave)
+    button.bind("<ButtonRelease-1>", click)
     return button

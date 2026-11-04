@@ -1,8 +1,8 @@
 # Cortana
 
-A local, self-improving AI assistant for Chromebooks. It runs a small
-quantized model on-device via [Ollama](https://ollama.com), opens as a real
-app from the ChromeOS launcher, and grows a local knowledge base over time by
+A local, self-improving AI assistant for Chromebooks and Macs. It runs a
+small quantized model on-device via [Ollama](https://ollama.com), opens as a
+real app from the ChromeOS launcher or the Mac's Launchpad, and grows a local knowledge base over time by
 researching the web — including on its own, unprompted.
 
 ![The Cortana app](assets/screenshot.png)
@@ -20,6 +20,40 @@ installs Ollama and downloads a model sized to your Chromebook's RAM, adds
 Cortana to the ChromeOS launcher, and starts the background research daemon.
 
 Then open **Cortana** from the launcher — no terminal needed.
+
+### On a Mac
+
+Same command, run from Terminal in your home folder:
+
+```bash
+git clone <this repo> ~/cortana
+cd ~/cortana
+bash install.sh
+```
+
+On macOS the installer:
+
+- Uses Homebrew if you have it, to install Python with Tk (`python`,
+  `python-tk`) and Ollama. Without Homebrew, install
+  [Python from python.org](https://www.python.org/downloads/macos/) (its
+  installer includes Tk) and [Ollama](https://ollama.com/download) first.
+  Apple's built-in `/usr/bin/python3` is skipped on purpose: its Tk 8.5 is
+  deprecated and draws blank or broken windows on current macOS.
+- Sizes the model from `hw.memsize` using the same table as below.
+- Creates `~/Applications/Cortana.app`, so Cortana shows up in Launchpad,
+  Spotlight and the Dock.
+- Runs background research as a per-user LaunchAgent
+  (`~/Library/LaunchAgents/local.cortana.daemon.plist`), so it starts at
+  every login with no `sudo`. Its log is `daemon.log` in the install folder.
+
+Keep the folder **out of Desktop, Documents and Downloads**. macOS blocks
+background processes from reading those folders, so research would fail with
+"Operation not permitted". The installer refuses to set up the service from
+there and says so.
+
+Works on Apple Silicon and Intel Macs running macOS 11 or newer. Apple
+Silicon runs models on its GPU through Metal, so replies come back much faster
+than on a Chromebook.
 
 ## How "self-improve" works here
 
@@ -52,13 +86,13 @@ scope here.
 
 ## Requirements
 
-- A Chromebook with Linux (Crostini) enabled:
+- A Mac (see *On a Mac* above), or a Chromebook with Linux (Crostini) enabled:
   Settings → Advanced → Developers → Linux development environment.
 - ~4GB free disk space for the model (more if you let the daemon run for
   months — see *Disk and speed* below).
 - Works on both Intel/AMD and ARM Chromebooks.
 
-### What the installer handles
+### What the installer handles on a Chromebook
 
 These are the things that actually bite on a fresh Crostini container:
 
@@ -87,6 +121,8 @@ The installer picks automatically:
 | 4–8GB | `gemma2:2b` | ~1.6GB |
 | 8GB+ | `llama3.2:3b` | ~2GB |
 
+On a Mac the same table applies to the Mac's total memory.
+
 Detection reads `MemTotal`, which reports what the Crostini VM actually got —
 a few percent under the Chromebook's nominal RAM — and rounds down. So a
 nominal 8GB Chromebook lands on the 2B model. That bias is deliberate:
@@ -96,7 +132,7 @@ Override any time with `export CHAT_MODEL=llama3.2:3b`.
 
 ## Usage
 
-Open **Cortana** from the ChromeOS launcher. In the app:
+Open **Cortana** from the ChromeOS launcher (or Launchpad on a Mac). In the app:
 
 - Type in the box to chat. Relevant saved notes are pulled in automatically,
   and Cortana researches the web on her own mid-answer when she doesn't know
@@ -119,8 +155,8 @@ The sidebar keeps separate conversations, like any chat app:
 - Each chat keeps its own context — a follow-up like "tell me more about
   that" resolves against that conversation only, and nothing leaks between
   threads.
-- **Delete** a chat with the ✕ on its row, or right-click for rename and
-  delete. Deleting a conversation removes only that thread; notes Cortana
+- **Delete** a chat with the ✕ on its row, or right-click (Control-click on
+  a Mac) for rename and delete. Deleting a conversation removes only that thread; notes Cortana
   learned stay in her memory, since memory is shared across every chat.
 
 That last point is the important distinction: a *conversation* is one thread
@@ -156,7 +192,7 @@ python -m llm_agent.daemon "topic one" "topic two"   # seed topics optional
 ./install-service.sh
 ```
 
-It starts with the Linux container from then on. Useful commands:
+On a Chromebook it starts with the Linux container from then on. Useful commands:
 
 ```bash
 systemctl status cortana-daemon      # is it running?
@@ -164,7 +200,18 @@ journalctl -u cortana-daemon -f      # watch what it's learning
 sudo systemctl disable --now cortana-daemon   # turn it off
 ```
 
-**What "automatic" can and can't mean here:** the Crostini container only
+On a Mac it's a LaunchAgent instead, running whenever you're logged in:
+
+```bash
+tail -f ~/cortana/daemon.log                         # watch what it's learning
+launchctl print gui/$(id -u)/local.cortana.daemon    # is it running?
+launchctl bootout gui/$(id -u)/local.cortana.daemon  # stop until next login
+```
+
+To turn it off for good, run that last command and then delete
+`~/Library/LaunchAgents/local.cortana.daemon.plist`.
+
+**What "automatic" can and can't mean on a Chromebook:** the Crostini container only
 runs while ChromeOS's Linux is running — ChromeOS starts it when you open a
 Linux app and stops it when Linux shuts down or the Chromebook powers off.
 So this starts with no command from you, but it can't research while the
@@ -277,12 +324,12 @@ llm_agent/
   gui.py          the desktop app (Tk, worker thread, never blocks the UI)
   cli.py          interactive REPL
 install.sh        one-command installer -- calls the two below
-install-launcher.sh  ChromeOS launcher entry (.desktop + icon)
-install-service.sh   background research as a systemd service
+install-launcher.sh  ChromeOS launcher entry, or Cortana.app on a Mac
+install-service.sh   background research: systemd, or a LaunchAgent on a Mac
 launch-cortana.sh    what the launcher icon runs
 tools/make_icon.py   renders the app icon (stdlib only, no Pillow)
 assets/           icon and screenshot
-tests/            101 tests, no network or Ollama required
+tests/            127 tests, no network or Ollama required
 ```
 
 ## Testing

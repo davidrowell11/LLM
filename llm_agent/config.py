@@ -1,11 +1,16 @@
 """Environment-variable driven settings. Everything has a Chromebook-friendly default."""
 
 import os
+import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 ASSISTANT_NAME = os.environ.get("ASSISTANT_NAME", "Cortana")
+
+IS_MAC = sys.platform == "darwin"
+# What the assistant calls the machine it runs on, in its prompt and the app.
+DEVICE_NAME = os.environ.get("DEVICE_NAME", "Mac" if IS_MAC else "Chromebook")
 
 OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
 CHAT_MODEL = os.environ.get("CHAT_MODEL", "llama3.2:3b")
@@ -48,7 +53,7 @@ CURIOSITY_IDLE_POLL_SECONDS = int(os.environ.get("CURIOSITY_IDLE_POLL_SECONDS", 
 _DEFAULT_SEEDS = (
     "how retrieval augmented generation works;"
     "running large language models locally on low-power hardware;"
-    "ChromeOS Crostini Linux container tips"
+    + ("macOS command line tips" if IS_MAC else "ChromeOS Crostini Linux container tips")
 )
 SEED_TOPICS = [
     topic.strip()

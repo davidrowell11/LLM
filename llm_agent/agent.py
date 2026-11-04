@@ -33,7 +33,7 @@ MAX_SEARCH_QUERY_CHARS = 200
 
 CHAT_SYSTEM_PROMPT = (
     f"You are {config.ASSISTANT_NAME}, a helpful assistant running locally on "
-    "the user's Chromebook. Refer to yourself as "
+    f"the user's {config.DEVICE_NAME}. Refer to yourself as "
     f"{config.ASSISTANT_NAME} whenever you name yourself. "
     "You have access to a memory of notes you've researched previously, given "
     "below as context — use it when relevant, and say when you're relying on it. "
