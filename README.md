@@ -282,7 +282,7 @@ install-service.sh   background research as a systemd service
 launch-cortana.sh    what the launcher icon runs
 tools/make_icon.py   renders the app icon (stdlib only, no Pillow)
 assets/           icon and screenshot
-tests/            111 tests, no network or Ollama required
+tests/            101 tests, no network or Ollama required
 ```
 
 ## Testing
